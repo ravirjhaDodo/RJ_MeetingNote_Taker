@@ -16,6 +16,8 @@ See `PROJECT_CONTEXT.md` for the living project context. Update it whenever arch
 - Qdrant Cloud for vector search.
 - OpenAI API for embeddings and answers.
 
+Firebase setup details are in `docs/firebase-setup.md`.
+
 ## Required local files
 
 Create these files from the examples:

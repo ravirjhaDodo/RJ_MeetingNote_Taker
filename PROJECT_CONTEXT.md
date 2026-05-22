@@ -147,6 +147,15 @@ public/firebase-config.example.js
 
 This file contains Firebase web app identifiers, not private service credentials.
 
+## Firebase Setup Status
+
+As of the current setup:
+
+- `.firebaserc` is not configured yet.
+- `public/firebase-config.local.js` is not configured yet.
+- Firebase CLI is not installed or not available on PATH.
+- `docs/firebase-setup.md` contains the setup checklist for creating the Firebase project, Auth provider, Firestore database, web app config, and local project link.
+
 ## Update Rule
 
 When project behavior, architecture, service choices, file structure, ports, setup steps, or environment variables change, update this context file in the same turn.
