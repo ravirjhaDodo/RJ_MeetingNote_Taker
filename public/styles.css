@@ -169,6 +169,11 @@ button:disabled {
   font-weight: 800;
 }
 
+.compact-toggle {
+  min-height: 0;
+  padding: 0;
+}
+
 .speaker-control {
   display: grid;
   gap: 3px;
@@ -189,7 +194,8 @@ button:disabled {
 }
 
 .speaker-control select,
-.translation-tools select {
+.translation-tools select,
+.full-input {
   width: 100%;
   min-width: 0;
   height: 42px;
@@ -198,6 +204,10 @@ button:disabled {
   padding: 0 10px;
   background: white;
   outline: 0;
+}
+
+.full-input {
+  margin-bottom: 8px;
 }
 
 .search-box {
@@ -448,6 +458,13 @@ textarea {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+}
+
+.cloud-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .export-actions button {

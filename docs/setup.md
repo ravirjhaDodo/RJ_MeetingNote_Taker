@@ -21,10 +21,16 @@ See `PROJECT_CONTEXT.md` for the living project context. Update it whenever arch
 Create these files from the examples:
 
 ```text
-config/firebase.client.js
+public/firebase-config.local.js
 .firebaserc
 .env.local
 functions/.env.local
+```
+
+Copy the browser config example:
+
+```powershell
+Copy-Item public\firebase-config.example.js public\firebase-config.local.js
 ```
 
 ## Environment variables

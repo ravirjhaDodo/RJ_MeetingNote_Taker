@@ -40,6 +40,10 @@ Current capabilities:
 - Local Q&A over captured notes.
 - Translation UI placeholder.
 - Exports: TXT, Markdown, JSON, Word-compatible `.doc`, and SRT.
+- Firebase client wiring for Google sign-in when `public/firebase-config.local.js` is present.
+- Cloud save button that calls the `saveMeeting` Firebase Function.
+- Saved meeting list from Firestore for the signed-in user.
+- Cloud Q&A toggle that calls the `askMeeting` Firebase Function and searches Qdrant-filtered saved notes.
 
 ## Backend Plan
 
@@ -117,6 +121,7 @@ Expected local files:
 
 - `.env.local`
 - `functions/.env.local`
+- `public/firebase-config.local.js`
 
 Expected variables:
 
@@ -127,6 +132,20 @@ Expected variables:
 - `OPENAI_EMBEDDING_MODEL`
 - `OPENAI_ANSWER_MODEL`
 - `QDRANT_VECTOR_SIZE`
+
+Public Firebase config file:
+
+```text
+public/firebase-config.local.js
+```
+
+Create it from:
+
+```text
+public/firebase-config.example.js
+```
+
+This file contains Firebase web app identifiers, not private service credentials.
 
 ## Update Rule
 

@@ -29,6 +29,14 @@ const els = {
   questionForm: document.querySelector("#questionForm"),
   questionInput: document.querySelector("#questionInput"),
   answerOutput: document.querySelector("#answerOutput"),
+  signInButton: document.querySelector("#signInButton"),
+  signOutButton: document.querySelector("#signOutButton"),
+  cloudStatus: document.querySelector("#cloudStatus"),
+  meetingTitleInput: document.querySelector("#meetingTitleInput"),
+  saveCloudButton: document.querySelector("#saveCloudButton"),
+  refreshMeetingsButton: document.querySelector("#refreshMeetingsButton"),
+  savedMeetingSelect: document.querySelector("#savedMeetingSelect"),
+  useCloudQuestionToggle: document.querySelector("#useCloudQuestionToggle"),
   translationTargetSelect: document.querySelector("#translationTargetSelect"),
   translateButton: document.querySelector("#translateButton"),
   translationOutput: document.querySelector("#translationOutput"),
@@ -152,6 +160,7 @@ function render() {
     : "Start the app, allow microphone access, and this area will fill as people speak.");
   renderNotes();
   renderInsights();
+  renderCloudControls();
 }
 
 function renderNotes() {
@@ -285,6 +294,87 @@ function renderInsights() {
     row.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
     els.insightsOutput.appendChild(row);
   });
+}
+
+function renderCloudControls() {
+  const cloud = window.RJCloud;
+  const ready = Boolean(cloud?.ready);
+  const user = cloud?.user;
+  const signedIn = Boolean(user);
+  els.signInButton.disabled = !ready || signedIn;
+  els.signOutButton.disabled = !ready || !signedIn;
+  els.saveCloudButton.disabled = !ready || !signedIn || !state.transcriptItems.length;
+  els.refreshMeetingsButton.disabled = !ready || !signedIn;
+  els.savedMeetingSelect.disabled = !ready || !signedIn;
+  els.useCloudQuestionToggle.disabled = !ready || !signedIn;
+
+  if (!ready) {
+    els.cloudStatus.textContent = "Add public/firebase-config.js from the example to enable Firebase Auth, cloud save, and saved-meeting Q&A.";
+  } else if (!signedIn) {
+    els.cloudStatus.textContent = "Sign in to save meetings and ask questions against saved cloud notes.";
+  } else {
+    els.cloudStatus.textContent = `Signed in as ${user.email || user.displayName || "Firebase user"}.`;
+  }
+}
+
+function meetingTitle() {
+  return els.meetingTitleInput.value.trim() || `Meeting ${new Date().toLocaleString()}`;
+}
+
+function serializedSegments() {
+  return state.transcriptItems.map((item, index) => ({
+    id: item.id,
+    speaker: item.speaker,
+    type: item.type,
+    text: item.text,
+    timestamp: item.timestamp.toISOString(),
+    order: index,
+  }));
+}
+
+async function saveCurrentMeetingToCloud() {
+  if (!state.transcriptItems.length) {
+    setStatus("Nothing to save yet", false);
+    return;
+  }
+
+  try {
+    setStatus("Saving cloud notes", false);
+    const result = await window.RJCloud.saveMeeting({
+      title: meetingTitle(),
+      segments: serializedSegments(),
+    });
+    setStatus("Cloud saved", false);
+    await refreshSavedMeetings(result.meetingId);
+  } catch (error) {
+    setStatus("Cloud save failed", false);
+    els.cloudStatus.textContent = error.message || "Cloud save failed.";
+  }
+}
+
+async function refreshSavedMeetings(selectedMeetingId = "") {
+  try {
+    const meetings = await window.RJCloud.listMeetings();
+    els.savedMeetingSelect.innerHTML = "";
+
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = meetings.length ? "All saved meetings" : "No saved meetings yet";
+    els.savedMeetingSelect.appendChild(empty);
+
+    meetings.forEach((meeting) => {
+      const option = document.createElement("option");
+      option.value = meeting.id;
+      option.textContent = `${meeting.title || "Untitled meeting"} (${meeting.segmentCount || 0})`;
+      els.savedMeetingSelect.appendChild(option);
+    });
+
+    els.savedMeetingSelect.value = selectedMeetingId;
+    setStatus("Meetings refreshed", false);
+  } catch (error) {
+    setStatus("Refresh failed", false);
+    els.cloudStatus.textContent = error.message || "Could not load saved meetings.";
+  }
 }
 
 function answerQuestion(question) {
@@ -620,6 +710,29 @@ els.addManualButton.addEventListener("click", () => {
   setStatus("Fallback captured", false);
   render();
 });
+els.signInButton.addEventListener("click", async () => {
+  try {
+    await window.RJCloud.signIn();
+  } catch (error) {
+    els.cloudStatus.textContent = error.message || "Sign-in failed.";
+  }
+});
+els.signOutButton.addEventListener("click", async () => {
+  try {
+    await window.RJCloud.signOut();
+  } catch (error) {
+    els.cloudStatus.textContent = error.message || "Sign-out failed.";
+  }
+});
+els.saveCloudButton.addEventListener("click", saveCurrentMeetingToCloud);
+els.refreshMeetingsButton.addEventListener("click", () => refreshSavedMeetings());
+window.addEventListener("rj-cloud-ready", renderCloudControls);
+window.addEventListener("rj-cloud-auth", async () => {
+  renderCloudControls();
+  if (window.RJCloud?.user) {
+    await refreshSavedMeetings();
+  }
+});
 els.translateButton.addEventListener("click", translateNotes);
 els.exportButtons.forEach((button) => {
   button.addEventListener("click", () => exportTranscript(button.dataset.exportFormat));
@@ -639,6 +752,21 @@ els.questionForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const question = els.questionInput.value.trim();
   if (!question) return;
+  if (els.useCloudQuestionToggle.checked && window.RJCloud?.user) {
+    els.answerOutput.textContent = "Searching saved cloud notes...";
+    window.RJCloud.askMeeting({
+      question,
+      meetingId: els.savedMeetingSelect.value,
+    }).then((result) => {
+      const sources = result.sources?.length
+        ? `<p><strong>Sources:</strong> ${result.sources.map((source) => escapeHtml(source.speaker || "Speaker 1")).join(", ")}</p>`
+        : "";
+      els.answerOutput.innerHTML = `<p>${escapeHtml(result.answer || "No answer returned.")}</p>${sources}`;
+    }).catch((error) => {
+      els.answerOutput.textContent = error.message || "Cloud Q&A failed.";
+    });
+    return;
+  }
   els.answerOutput.innerHTML = answerQuestion(question);
 });
 

@@ -97,9 +97,34 @@
 
           <aside class="side-panel">
             <section>
+              <p class="label">Cloud account</p>
+              <div class="cloud-actions">
+                <button id="signInButton" class="primary-button" type="button">Sign in with Google</button>
+                <button id="signOutButton" class="secondary-button" type="button" disabled>Sign out</button>
+              </div>
+              <div id="cloudStatus" class="answer-output">Cloud save and saved-meeting Q&A are inactive until Firebase is configured.</div>
+            </section>
+
+            <section>
+              <p class="label">Saved meetings</p>
+              <input id="meetingTitleInput" class="full-input" type="text" placeholder="Meeting title">
+              <div class="cloud-actions">
+                <button id="saveCloudButton" class="primary-button" type="button" disabled>Save to cloud</button>
+                <button id="refreshMeetingsButton" class="secondary-button" type="button" disabled>Refresh</button>
+              </div>
+              <select id="savedMeetingSelect" class="full-input" disabled>
+                <option value="">No saved meeting selected</option>
+              </select>
+            </section>
+
+            <section>
               <p class="label">Ask during the meeting</p>
               <form id="questionForm" class="ask-form">
                 <textarea id="questionInput" rows="3" placeholder="What decisions have we made so far?"></textarea>
+                <label class="toggle compact-toggle">
+                  <input id="useCloudQuestionToggle" type="checkbox" disabled>
+                  <span>Ask saved cloud notes</span>
+                </label>
                 <button class="primary-button" type="submit">Ask</button>
               </form>
               <div id="answerOutput" class="answer-output">Answers will use the notes captured so far.</div>
@@ -148,6 +173,9 @@
       </div>
     </template>
 
+    <script src="firebase-config.js"></script>
+    <script src="firebase-config.local.js"></script>
+    <script type="module" src="cloud.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
