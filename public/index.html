@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RJ Meeting Notes Taker</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">RJ Meeting Notes Taker</p>
+            <h1>Listen, structure, search, and ask while the meeting is still moving.</h1>
+          </div>
+          <div class="status-panel" aria-live="polite">
+            <span id="statusDot" class="status-dot"></span>
+            <span id="meetingStatus">Ready to start</span>
+          </div>
+        </header>
+
+        <section class="controls" aria-label="Meeting controls">
+          <button id="startButton" class="primary-button" type="button">Start listening</button>
+          <button id="stopButton" class="icon-button" type="button" disabled aria-label="Stop listening" title="Stop listening">■</button>
+          <button id="sampleButton" class="secondary-button" type="button">Load sample meeting</button>
+          <label class="speaker-control">
+            <span>Speaker</span>
+            <input id="speakerInput" type="text" list="speakerList" placeholder="Speaker 1">
+          </label>
+          <datalist id="speakerList"></datalist>
+          <label class="speaker-control">
+            <span>Listen language</span>
+            <select id="listenLanguageSelect">
+              <option value="en-US">English</option>
+              <option value="es-ES">Spanish</option>
+              <option value="fr-FR">French</option>
+              <option value="hi-IN">Hindi</option>
+              <option value="ta-IN">Tamil</option>
+              <option value="zh-CN">Chinese</option>
+            </select>
+          </label>
+          <label class="toggle">
+            <input id="autoFormatToggle" type="checkbox" checked>
+            <span>Auto-format</span>
+          </label>
+          <div class="search-box">
+            <span aria-hidden="true">⌕</span>
+            <input id="searchInput" type="search" placeholder="Search notes, decisions, owners...">
+          </div>
+        </section>
+
+        <section class="live-strip">
+          <div>
+            <p class="label">Live transcript</p>
+            <p id="liveTranscript" class="live-text">Start the app, allow microphone access, and this area will fill as people speak.</p>
+          </div>
+          <div class="meter" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+        </section>
+
+        <section id="micHelp" class="mic-help is-hidden" aria-live="polite">
+          <div>
+            <p class="label">Microphone access blocked</p>
+            <h2>Allow the microphone, then start listening again.</h2>
+            <ol>
+              <li>Select the lock or tune icon in the browser address bar.</li>
+              <li>Set Microphone to Allow for this site.</li>
+              <li>Refresh the page if the browser asks you to.</li>
+              <li>Come back here and select Start listening.</li>
+            </ol>
+            <p class="helper-text">If another meeting app is already using the mic, keep it open and try again. Most systems can share the microphone.</p>
+          </div>
+          <button id="retryMicButton" class="primary-button" type="button">Try microphone again</button>
+        </section>
+
+        <section id="manualCapture" class="manual-capture" aria-label="Manual transcript capture">
+          <div>
+            <p class="label">Fallback capture</p>
+            <textarea id="manualTranscriptInput" rows="3" placeholder="Paste lines like Maya: Decision is final, or type plain notes and use the Speaker field above."></textarea>
+          </div>
+          <button id="addManualButton" class="secondary-button" type="button">Add to notes</button>
+        </section>
+
+        <section class="main-grid">
+          <article class="notes-panel">
+            <div class="panel-header">
+              <div>
+                <p class="label">Structured notes</p>
+                <h2>Meeting brief</h2>
+              </div>
+              <button id="clearButton" class="icon-button" type="button" aria-label="Clear notes" title="Clear notes">⌫</button>
+            </div>
+            <div id="notesOutput" class="notes-output" aria-live="polite"></div>
+          </article>
+
+          <aside class="side-panel">
+            <section>
+              <p class="label">Ask during the meeting</p>
+              <form id="questionForm" class="ask-form">
+                <textarea id="questionInput" rows="3" placeholder="What decisions have we made so far?"></textarea>
+                <button class="primary-button" type="submit">Ask</button>
+              </form>
+              <div id="answerOutput" class="answer-output">Answers will use the notes captured so far.</div>
+            </section>
+
+            <section>
+              <p class="label">Signals</p>
+              <div id="insightsOutput" class="insights"></div>
+            </section>
+
+            <section>
+              <p class="label">Translate notes</p>
+              <div class="translation-tools">
+                <select id="translationTargetSelect">
+                  <option value="en">English</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="hi">Hindi</option>
+                  <option value="ta">Tamil</option>
+                  <option value="zh">Chinese</option>
+                </select>
+                <button id="translateButton" class="secondary-button" type="button">Translate</button>
+              </div>
+              <div id="translationOutput" class="answer-output">Translations will appear here when a translation engine is available.</div>
+            </section>
+
+            <section>
+              <p class="label">Save transcript</p>
+              <div class="export-actions">
+                <button class="secondary-button" type="button" data-export-format="txt">TXT</button>
+                <button class="secondary-button" type="button" data-export-format="md">Markdown</button>
+                <button class="secondary-button" type="button" data-export-format="json">JSON</button>
+                <button class="secondary-button" type="button" data-export-format="doc">Word</button>
+                <button class="secondary-button" type="button" data-export-format="srt">SRT</button>
+              </div>
+            </section>
+          </aside>
+        </section>
+      </section>
+    </main>
+
+    <template id="emptyNotesTemplate">
+      <div class="empty-state">
+        <strong>No notes yet</strong>
+        <span>Start listening or load the sample meeting to try search and Q&A.</span>
+      </div>
+    </template>
+
+    <script src="app.js"></script>
+  </body>
+</html>

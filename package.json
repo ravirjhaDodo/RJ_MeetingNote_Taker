@@ -1,0 +1,15 @@
+{
+  "name": "rj-meeting-notes-taker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "firebase emulators:start",
+    "serve": "firebase emulators:start --only hosting,functions,firestore",
+    "deploy": "firebase deploy",
+    "functions:install": "npm --prefix functions install",
+    "functions:lint": "node --check functions/index.js"
+  },
+  "devDependencies": {
+    "firebase-tools": "^14.0.0"
+  }
+}
