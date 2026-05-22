@@ -83,6 +83,12 @@ GitHub owner:
 ravirjhaDodo
 ```
 
+GitHub repository:
+
+```text
+https://github.com/ravirjhaDodo/RJ_MeetingNote_Taker
+```
+
 Development branch:
 
 ```text
