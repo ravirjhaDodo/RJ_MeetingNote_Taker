@@ -881,10 +881,13 @@ function segmentNeedsPanelBTranslation(text, item = null) {
   if (!original) return false;
   const target = translatedPanelLanguageCode();
   if (target === "en") {
+    if (!isLikelyEnglish(original)) {
+      const current = String(item?.text ?? "").trim();
+      if (!current || /^\[/.test(current) || item?.panelBPending || item?.translationFailed) return true;
+      return !isLikelyEnglish(current);
+    }
     const current = String(item?.text ?? "").trim();
-    if (!current || /^\[/.test(current)) return Boolean(item?.panelBPending);
-    if (current === original) return false;
-    return !isLikelyEnglish(current);
+    return !current || Boolean(item?.panelBPending);
   }
   if (isLikelyEnglish(original)) return true;
   return true;
@@ -3131,20 +3134,18 @@ async function translateAllPanelB() {
   const items = state.transcriptItems.filter((item) =>
     segmentNeedsPanelBTranslation(item.originalText || item.text, item));
 
-  if (target === "en") {
-    for (const item of items.length ? items : state.transcriptItems) {
-      item.text = item.originalText || item.text;
-      item.panelBPending = false;
-      item.translationFailed = false;
-      item.type = classifyText(item.text);
-    }
-    render();
-    setStatus("Panel B restored to English (original transcript)", false);
-    return;
-  }
-
   if (!items.length) {
-    setStatus(`Notes are already in ${translatedPanelLanguageLabel()}`, false);
+    let filled = 0;
+    for (const item of state.transcriptItems) {
+      if ((!item.text || item.panelBPending) && item.originalText) {
+        item.text = item.originalText;
+        item.panelBPending = false;
+        item.translationFailed = false;
+        filled += 1;
+      }
+    }
+    if (filled) render();
+    setStatus(`Panel B is already in ${translatedPanelLanguageLabel()}`, false);
     return;
   }
 
@@ -3169,7 +3170,7 @@ async function translateAllPanelB() {
         translateText(source, target, { forceCloud: true, item }),
         TRANSLATION_CALL_TIMEOUT_MS,
       );
-      if (translated && translated !== source) {
+      if (translated && (translated !== source || isLikelyEnglish(source))) {
         item.text = translated;
         item.type = classifyText(item.text);
         item.panelBPending = false;
