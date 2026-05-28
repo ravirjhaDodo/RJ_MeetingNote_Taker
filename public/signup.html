@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign up — RJ Meeting Notes Taker</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="landing.css">
+  </head>
+  <body class="landing-body">
+    <main class="auth-page">
+      <p class="eyebrow"><a href="index.html">Home</a> · <a href="help/signup-and-userid.html">About UserID</a></p>
+      <h1>Create your account</h1>
+      <form id="signupForm" class="form-grid">
+        <label>UserID <input id="userIdInput" class="full-input" required autocomplete="username" placeholder="e.g. ravirjha"></label>
+        <p id="userIdStatus" class="userid-status" aria-live="polite"></p>
+        <label>First name <input id="firstNameInput" class="full-input" required></label>
+        <label>Last name <input id="lastNameInput" class="full-input" required></label>
+        <label>Contact email <input id="contactEmailInput" class="full-input" type="email" required autocomplete="email"></label>
+        <div class="password-row">
+          <input id="passwordInput" class="full-input" type="password" required autocomplete="new-password" placeholder="Password">
+          <button class="icon-button password-toggle" type="button" data-password-target="passwordInput" aria-label="Show password">Show</button>
+        </div>
+        <div class="password-row">
+          <input id="confirmPasswordInput" class="full-input" type="password" required autocomplete="new-password" placeholder="Confirm password">
+          <button class="icon-button password-toggle" type="button" data-password-target="confirmPasswordInput" aria-label="Show password">Show</button>
+        </div>
+        <button class="primary-button" type="submit">Sign up</button>
+        <p id="signupMessage" class="helper-text"></p>
+      </form>
+      <p>Already have an account? <a href="login.html">Log in</a></p>
+    </main>
+    <script src="firebase-config.js"></script>
+    <script src="firebase-config.local.js"></script>
+    <script type="module" src="cloud.js"></script>
+    <script type="module">
+      import {
+        wirePasswordToggles,
+        debounce,
+        checkUserIdAvailability,
+        registerAccount,
+      } from "./auth.js";
+
+      wirePasswordToggles();
+      const userIdInput = document.querySelector("#userIdInput");
+      const userIdStatus = document.querySelector("#userIdStatus");
+      const form = document.querySelector("#signupForm");
+      const message = document.querySelector("#signupMessage");
+
+      const checkId = debounce(async () => {
+        const userId = userIdInput.value.trim();
+        if (!userId) {
+          userIdStatus.textContent = "";
+          return;
+        }
+        try {
+          const result = await checkUserIdAvailability(userId);
+          if (result.available) {
+            userIdStatus.textContent = `UserID "${result.userId}" is available`;
+            userIdStatus.className = "userid-status is-available";
+          } else {
+            userIdStatus.textContent = result.reason || `UserID "${result.userId || userId}" is taken`;
+            userIdStatus.className = "userid-status is-taken";
+          }
+        } catch (error) {
+          userIdStatus.textContent = error.message;
+          userIdStatus.className = "userid-status is-invalid";
+        }
+      });
+
+      userIdInput.addEventListener("input", checkId);
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        message.textContent = "Creating account...";
+        try {
+          const result = await registerAccount({
+            userId: userIdInput.value.trim(),
+            firstName: document.querySelector("#firstNameInput").value.trim(),
+            lastName: document.querySelector("#lastNameInput").value.trim(),
+            contactEmail: document.querySelector("#contactEmailInput").value.trim(),
+            password: document.querySelector("#passwordInput").value,
+            confirmPassword: document.querySelector("#confirmPasswordInput").value,
+          });
+          message.textContent = result.status === "active"
+            ? "Account created. Redirecting to log in..."
+            : "Signup received. Your account is pending admin approval. Redirecting to log in...";
+          setTimeout(() => { window.location.href = "login.html"; }, 2000);
+        } catch (error) {
+          message.textContent = error.message;
+        }
+      });
+    </script>
+  </body>
+</html>

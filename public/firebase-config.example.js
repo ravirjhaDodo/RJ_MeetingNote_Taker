@@ -1,3 +1,4 @@
+// Copy to firebase-config.local.js (gitignored). See docs/firebase-setup.md and CODEX.md.
 window.RJ_FIREBASE_CONFIG = {
   apiKey: "your-web-api-key",
   authDomain: "your-project.firebaseapp.com",
@@ -8,3 +9,5 @@ window.RJ_FIREBASE_CONFIG = {
 };
 
 window.RJ_USE_FIREBASE_EMULATORS = false;
+window.RJ_BACKEND_MODE = "vercel";
+window.RJ_API_BASE_URL = "/api/rj";

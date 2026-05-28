@@ -6,3 +6,6 @@ window.RJ_FIREBASE_CONFIG = {
   messagingSenderId: "000000000000",
   appId: "1:000000000000:web:0000000000000000000000"
 };
+
+window.RJ_BACKEND_MODE = "vercel";
+window.RJ_API_BASE_URL = "/api/rj";

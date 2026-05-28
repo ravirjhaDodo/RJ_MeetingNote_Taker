@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Log in — RJ Meeting Notes Taker</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="landing.css">
+  </head>
+  <body class="landing-body">
+    <main class="auth-page">
+      <p class="eyebrow"><a href="index.html">Home</a> · <a href="help/login-and-recovery.html">Login help</a></p>
+      <h1>Log in</h1>
+      <form id="loginForm" class="form-grid">
+        <label>UserID <input id="userIdInput" class="full-input" required autocomplete="username"></label>
+        <div class="password-row">
+          <input id="passwordInput" class="full-input" type="password" required autocomplete="current-password" placeholder="Password">
+          <button class="icon-button password-toggle" type="button" data-password-target="passwordInput" aria-label="Show password">Show</button>
+        </div>
+        <button class="primary-button" type="submit">Log in</button>
+        <p id="loginMessage" class="helper-text"></p>
+      </form>
+      <p><a href="forgot-password.html">Forgot password</a> · <a href="forgot-userid.html">Forgot UserID</a></p>
+      <p>No account? <a href="signup.html">Sign up</a> · <a href="app.html">Continue as guest</a></p>
+    </main>
+    <script src="firebase-config.js"></script>
+    <script src="firebase-config.local.js"></script>
+    <script type="module" src="cloud.js"></script>
+    <script type="module">
+      import { wirePasswordToggles, signInWithUserId } from "./auth.js";
+
+      wirePasswordToggles();
+      const form = document.querySelector("#loginForm");
+      const message = document.querySelector("#loginMessage");
+      const submitButton = form.querySelector('button[type="submit"]');
+      let cloudReady = Boolean(window.RJCloud?.ready);
+
+      function setLoginReady(ready) {
+        cloudReady = ready;
+        if (submitButton) submitButton.disabled = !ready;
+        if (!ready) {
+          message.textContent = "Firebase is not configured. Add public/firebase-config.local.js for local login.";
+        } else if (window.RJ_USE_FIREBASE_EMULATORS) {
+          message.textContent = "Local emulators: if login fails after a restart, run npm run seed:emulator in the project folder.";
+        } else {
+          message.textContent = "";
+        }
+      }
+
+      setLoginReady(cloudReady);
+      window.addEventListener("rj-cloud-ready", () => setLoginReady(Boolean(window.RJCloud?.ready)));
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!cloudReady) {
+          message.textContent = "Firebase is still loading. Wait a moment and try again.";
+          return;
+        }
+        message.textContent = "Signing in...";
+        try {
+          await signInWithUserId(
+            document.querySelector("#userIdInput").value,
+            document.querySelector("#passwordInput").value,
+          );
+          window.location.href = "app.html";
+        } catch (error) {
+          message.textContent = error.message || "Login failed.";
+        }
+      });
+    </script>
+  </body>
+</html>

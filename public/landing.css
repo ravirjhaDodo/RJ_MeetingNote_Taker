@@ -1,0 +1,155 @@
+.landing-body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  color: #14231c;
+  background: linear-gradient(135deg, #f4fbf7 0%, #e8f2ff 45%, #f8f4ec 100%);
+  background-size: 200% 200%;
+  animation: landingGradient 18s ease infinite;
+}
+
+@keyframes landingGradient {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.landing-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+
+.landing-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 3rem;
+}
+
+.landing-nav a {
+  color: #315c99;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.landing-hero h1 {
+  font-size: clamp(2rem, 5vw, 3.2rem);
+  line-height: 1.15;
+  margin: 0.5rem 0 1rem;
+  animation: fadeUp 0.8s ease both;
+}
+
+.landing-hero .eyebrow {
+  animation: fadeUp 0.6s ease both;
+}
+
+.landing-hero p {
+  font-size: 1.1rem;
+  max-width: 42rem;
+  animation: fadeUp 1s ease both;
+}
+
+.landing-ctas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 1.75rem 0;
+  animation: fadeUp 1.2s ease both;
+}
+
+.landing-ctas .primary-button,
+.landing-ctas .secondary-button {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin-top: 2.5rem;
+}
+
+.feature-card {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(49, 92, 153, 0.12);
+  border-radius: 14px;
+  padding: 1.25rem;
+  box-shadow: 0 8px 24px rgba(20, 35, 28, 0.06);
+  animation: floatCard 6s ease-in-out infinite;
+}
+
+.feature-card:nth-child(2) { animation-delay: 1s; }
+.feature-card:nth-child(3) { animation-delay: 2s; }
+
+@keyframes floatCard {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.account-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.account-table th,
+.account-table td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid #e6ece8;
+}
+
+.landing-footer {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(49, 92, 153, 0.15);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.auth-page {
+  max-width: 480px;
+  margin: 2rem auto;
+  padding: 2rem;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(20, 35, 28, 0.08);
+}
+
+.auth-page h1 {
+  margin-top: 0;
+}
+
+.userid-status {
+  font-size: 0.9rem;
+  margin-top: 0.35rem;
+}
+
+.userid-status.is-available { color: #1a7a3d; }
+.userid-status.is-taken { color: #b42318; }
+.userid-status.is-invalid { color: #9a6700; }
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-body,
+  .landing-hero h1,
+  .landing-hero p,
+  .landing-ctas,
+  .feature-card {
+    animation: none;
+  }
+}

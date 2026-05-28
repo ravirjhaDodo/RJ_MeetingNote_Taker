@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Forgot UserID — RJ Meeting Notes Taker</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="landing.css">
+  </head>
+  <body class="landing-body">
+    <main class="auth-page">
+      <p class="eyebrow"><a href="login.html">Back to login</a> · <a href="help/login-and-recovery.html">Recovery guide</a></p>
+      <h1>Forgot UserID</h1>
+      <form id="forgotForm" class="form-grid">
+        <label>Contact email <input id="contactEmailInput" class="full-input" type="email" required></label>
+        <button class="primary-button" type="submit">Email my UserIDs</button>
+        <p id="message" class="helper-text"></p>
+      </form>
+    </main>
+    <script src="firebase-config.js"></script>
+    <script src="firebase-config.local.js"></script>
+    <script type="module" src="cloud.js"></script>
+    <script type="module">
+      import { requestUserIdReminder } from "./auth.js";
+      document.querySelector("#forgotForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const message = document.querySelector("#message");
+        message.textContent = "Sending...";
+        try {
+          const result = await requestUserIdReminder(document.querySelector("#contactEmailInput").value.trim());
+          message.textContent = result.message;
+        } catch (error) {
+          message.textContent = error.message;
+        }
+      });
+    </script>
+  </body>
+</html>

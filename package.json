@@ -2,14 +2,26 @@
   "name": "rj-meeting-notes-taker",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "start": "firebase emulators:start",
-    "serve": "firebase emulators:start --only hosting,functions,firestore",
-    "deploy": "firebase deploy",
+    "start": "node scripts/run-emulators.js emulators:start",
+    "serve": "node scripts/run-emulators.js emulators:start --only hosting,functions,firestore,auth",
+    "serve:lite": "node scripts/run-emulators.js emulators:start --only hosting,functions,auth",
+    "deploy": "npx firebase deploy",
+    "vercel:dev": "vercel dev --listen 127.0.0.1:4175",
     "functions:install": "npm --prefix functions install",
-    "functions:lint": "node --check functions/index.js"
+    "functions:lint": "node --check functions/index.js",
+    "lint": "node --check public/app.js && node --check public/cloud.js && node --check public/auth.js && node --check functions/index.js && node --check functions/lib/rj-shared.js && node --check api/rj.js",
+    "seed:owner": "node scripts/seed-platform-owner.js",
+    "seed:emulator": "node scripts/seed-emulator.js",
+    "set-password": "node functions/scripts/set-user-password.js"
+  },
+  "dependencies": {
+    "@qdrant/js-client-rest": "^1.13.0",
+    "firebase-admin": "^13.0.0",
+    "openai": "^4.104.0"
   },
   "devDependencies": {
-    "firebase-tools": "^14.0.0"
+    "firebase-tools": "^14.27.0"
   }
 }

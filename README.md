@@ -1,34 +1,67 @@
 # RJ Meeting Notes Taker
 
-RJ Meeting Notes Taker is a meeting note-taking prototype for live transcription, structured notes, speaker labels, search, Q&A, translation-ready workflows, and exports.
+Live meeting notes in the browser: speech capture, structured decisions/actions/risks, multilingual transcripts, cloud save, semantic Q&A, and **AI-generated meeting notes** after each session.
 
-## Project Home
-
-```text
-C:\Users\ravir\OneDrive\AI Projects\RJ_MeetingNote_Taker
-```
-
-## Local Preview
+## Quick start (local — full stack)
 
 ```powershell
-cd "C:\Users\ravir\OneDrive\AI Projects\RJ_MeetingNote_Taker\public"
+cd "C:\Users\ravir\OneDrive\AI Projects\RJ_MeetingNote_Taker"
+npm install
+npm run functions:install
+npm run serve
+```
+
+In another terminal (after emulators are up):
+
+```powershell
+npm run seed:emulator
+```
+
+Open **http://127.0.0.1:5180/** (landing) or **http://127.0.0.1:5180/app.html** (meeting). Log in at **http://127.0.0.1:5180/login.html** with UserID `ravirjha` (default dev password from seed script).
+
+Configure `public/firebase-config.local.js` with `RJ_USE_FIREBASE_EMULATORS = true` and `RJ_BACKEND_MODE = "firebase"`. See [docs/setup.md](docs/setup.md).
+
+### Static-only (no emulators)
+
+```powershell
+cd public
 python -m http.server 4175 --bind 127.0.0.1
 ```
 
-Open:
+Open **http://127.0.0.1:4175/app.html** — local capture works without login; cloud features need a backend.
 
-```text
-http://127.0.0.1:4175
-```
+## Documentation map
+
+| Document | Audience |
+|----------|----------|
+| [**CODEX.md**](CODEX.md) | AI agents / Codex — architecture, APIs, file map |
+| [**PROJECT_CONTEXT.md**](PROJECT_CONTEXT.md) | Living project status, ports, git branches, env |
+| [docs/setup.md](docs/setup.md) | Install, env files, local + Vercel run |
+| [docs/firebase-setup.md](docs/firebase-setup.md) | Firebase console checklist |
+| [docs/help/](docs/help/) | End-user help (markdown) |
 
 ## Stack
 
-- Static frontend prototype in `public/`
-- Firebase Auth and Firestore
-- Firebase Functions backend scaffold
-- Qdrant Cloud vector search
-- OpenAI embeddings and Q&A
+- **Frontend:** static HTML/JS in `public/`
+- **Auth:** Firebase Auth with UserID-based internal emails
+- **API:** Vercel `api/rj.js` (default) or Firebase Functions
+- **Data:** Firestore, Qdrant vectors, OpenAI, Resend email
 
-## Context
+## Key URLs (production)
 
-See `PROJECT_CONTEXT.md` for the living project context and update rules.
+After Vercel deploy: site root = landing, `/app.html` = app, `/api/rj` = backend.
+
+## Scripts
+
+```powershell
+npm run serve
+npm run seed:emulator
+npm run lint
+npm run vercel:dev
+npm run set-password -- ravirjha "your-password"
+npm run seed:owner
+```
+
+## License / status
+
+Private prototype. See `PROJECT_CONTEXT.md` for implementation status and service configuration.

@@ -1,13 +1,12 @@
 import { createCipheriv, randomBytes, randomUUID, scryptSync } from "node:crypto";
-import { initializeApp } from "firebase-admin/app";
+import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { setGlobalOptions } from "firebase-functions/v2";
-import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import OpenAI from "openai";
 import { QdrantClient } from "@qdrant/js-client-rest";
 import {
   PLATFORM_ADMIN_EMAIL,
+  PLATFORM_OWNER_USER_ID,
   FEATURE_KEYS,
   buildMeetingNotesUserPrompt,
   buildSpeakerInferencePrompt,
@@ -21,9 +20,8 @@ import {
   INTERNAL_AUTH_DOMAIN,
   isPlatformOwner,
   isProfileAdmin,
-  meetingNotesSystemPrompt,
   normalizeUserId,
-  PLATFORM_OWNER_USER_ID,
+  meetingNotesSystemPrompt,
   ASSEMBLYAI_STREAMING_TOKEN_URL,
   ASSEMBLYAI_BASE_URL,
   buildPrerecordedTranscriptRequest,
@@ -32,64 +30,89 @@ import {
   serializeProfile,
   validatePassword,
   validateUserId,
-} from "./lib/rj-shared.js";
+} from "../functions/lib/rj-shared.js";
 
-initializeApp();
-setGlobalOptions({ region: "us-central1", maxInstances: 10 });
-
-const db = getFirestore();
-const auth = getAuth();
-
-let openai;
-let qdrant;
-
-function getOpenAI() {
-  if (!openai) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new HttpsError("failed-precondition", "OPENAI_API_KEY is not configured.");
-    }
-    openai = new OpenAI({ apiKey });
-  }
-  return openai;
-}
-
-function getQdrant() {
-  if (!qdrant) {
-    qdrant = new QdrantClient({
-      url: process.env.QDRANT_URL,
-      apiKey: process.env.QDRANT_API_KEY,
-    });
-  }
-  return qdrant;
-}
-
+const NOTES_MODEL = process.env.OPENAI_NOTES_MODEL || process.env.OPENAI_ANSWER_MODEL || "gpt-4.1-mini";
 const COLLECTION = process.env.QDRANT_COLLECTION || "rj_meeting_notes";
 const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const ANSWER_MODEL = process.env.OPENAI_ANSWER_MODEL || "gpt-4.1-mini";
 const VECTOR_SIZE = Number(process.env.QDRANT_VECTOR_SIZE || 1536);
-const NOTES_MODEL = process.env.OPENAI_NOTES_MODEL || process.env.OPENAI_ANSWER_MODEL || "gpt-4.1-mini";
-const ADMIN_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev";
+const ADMIN_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "RJ Meeting Notes Taker <onboarding@resend.dev>";
 const ADMIN_REPLY_TO_EMAIL = process.env.ADMIN_EMAIL || PLATFORM_ADMIN_EMAIL;
 
-function requireAuth(request) {
-  if (!request.auth?.uid) {
-    throw new HttpsError("unauthenticated", "Sign in before saving or asking questions.");
+let cachedAdmin = null;
+let cachedOpenAI = null;
+let cachedQdrant = null;
+
+class ApiError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
   }
-  return request.auth.uid;
 }
 
-function profileRef(uid) {
-  return db.collection("users").doc(uid);
+function firebaseCredential() {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    throw new ApiError(500, "FIREBASE_SERVICE_ACCOUNT_JSON is not configured.");
+  }
+  try {
+    return cert(JSON.parse(raw));
+  } catch {
+    throw new ApiError(500, "FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON.");
+  }
+}
+
+function admin() {
+  if (cachedAdmin) return cachedAdmin;
+  const app = getApps()[0] || initializeApp({ credential: firebaseCredential() });
+  cachedAdmin = { auth: getAuth(app), db: getFirestore(app) };
+  return cachedAdmin;
+}
+
+function openai() {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new ApiError(500, "OPENAI_API_KEY is not configured.");
+  }
+  if (!cachedOpenAI) cachedOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return cachedOpenAI;
+}
+
+function qdrant() {
+  if (!process.env.QDRANT_URL || !process.env.QDRANT_API_KEY) {
+    throw new ApiError(500, "QDRANT_URL and QDRANT_API_KEY must be configured.");
+  }
+  if (!cachedQdrant) {
+    cachedQdrant = new QdrantClient({
+      url: process.env.QDRANT_URL,
+      apiKey: process.env.QDRANT_API_KEY,
+    });
+  }
+  return cachedQdrant;
 }
 
 function userIdsRef(userId) {
-  return db.collection("userIds").doc(normalizeUserId(userId));
+  return admin().db.collection("userIds").doc(normalizeUserId(userId));
+}
+
+function profileRef(uid) {
+  return admin().db.collection("users").doc(uid);
 }
 
 async function getProfile(uid) {
   const snapshot = await profileRef(uid).get();
   return snapshot.exists ? { uid, ...snapshot.data() } : null;
+}
+
+async function requireAuth(req) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!token) throw new ApiError(401, "Sign in before using cloud features.");
+  try {
+    return admin().auth.verifyIdToken(token);
+  } catch {
+    throw new ApiError(401, "Firebase session is invalid or expired.");
+  }
 }
 
 function userIdFromAuthEmail(email) {
@@ -104,11 +127,11 @@ function isProfilePlatformAdmin({ email, snapshotData }) {
   return isPlatformOwner({ userId, contactEmail });
 }
 
-async function ensureProfileForRequest(request) {
-  const uid = requireAuth(request);
-  const email = request.auth.token.email || "";
-  const displayName = request.auth.token.name || email.split("@")[0] || "User";
-  const photoURL = request.auth.token.picture || "";
+async function ensureProfileForToken(token) {
+  const uid = token.uid;
+  const email = token.email || "";
+  const displayName = token.name || email.split("@")[0] || "User";
+  const photoURL = token.picture || "";
   const ref = profileRef(uid);
   const snapshot = await ref.get();
   const isPlatformAdmin = isProfilePlatformAdmin({ email, snapshotData: snapshot.data() });
@@ -173,47 +196,29 @@ async function ensureProfileForRequest(request) {
     updates.roles = rolesForPrimaryRole(snapshot.data().role || "user");
   }
 
-  const mergedFeatures = updates.features || snapshot.data().features;
-  if (!isPlatformAdmin && mergedFeatures?.aiMeetingNotes?.status === "active"
-    && mergedFeatures?.aiMeetingNotes?.source === "trial"
-    && mergedFeatures?.autoTranslate?.status !== "active") {
-    updates.features = {
-      ...mergedFeatures,
-      autoTranslate: {
-        status: "active",
-        expiresAt: mergedFeatures.aiMeetingNotes.expiresAt || snapshot.data().aiNotesTrialEndsAt || null,
-        source: "trial",
-      },
-    };
-  }
-
   await ref.set(updates, { merge: true });
   return { uid, ...snapshot.data(), ...updates };
 }
 
-async function requireUsableUser(request) {
-  const profile = await ensureProfileForRequest(request);
+async function requireUsableUser(req) {
+  const token = await requireAuth(req);
+  const profile = await ensureProfileForToken(token);
   if (isProfileAdmin(profile)) return profile;
   if (profile.status !== "active") {
-    throw new HttpsError("permission-denied", `Account is ${profile.status || "not approved"}.`);
+    throw new ApiError(403, `Account is ${profile.status || "not approved"}.`);
   }
   return profile;
 }
 
-async function requireAdmin(request) {
-  const profile = await ensureProfileForRequest(request);
-  if (!isProfileAdmin(profile)) {
-    throw new HttpsError("permission-denied", "Admin access required.");
-  }
+async function requireAdmin(req) {
+  const token = await requireAuth(req);
+  const profile = await ensureProfileForToken(token);
+  if (!isProfileAdmin(profile)) throw new ApiError(403, "Admin access required.");
   return profile;
 }
 
 async function sendEmail({ to, subject, html }) {
-  if (!process.env.RESEND_API_KEY) {
-    console.log(`Email skipped, missing RESEND_API_KEY: ${subject} -> ${to}`);
-    return { skipped: true };
-  }
-
+  if (!process.env.RESEND_API_KEY) return { skipped: true };
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -230,17 +235,15 @@ async function sendEmail({ to, subject, html }) {
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new HttpsError("internal", `Resend email failed: ${text}`);
+    throw new ApiError(502, `Resend email failed: ${await response.text()}`);
   }
-
   return response.json();
 }
 
 function encryptionKey() {
   const secret = process.env.API_KEY_ENCRYPTION_SECRET;
   if (!secret || secret.length < 24) {
-    throw new HttpsError("failed-precondition", "API key encryption secret is not configured.");
+    throw new ApiError(500, "API key encryption secret is not configured.");
   }
   return scryptSync(secret, "rj-meeting-notes-taker", 32);
 }
@@ -266,29 +269,21 @@ function guestExpiryFromValue(value, unit) {
 }
 
 async function ensureCollection() {
-  const collections = await getQdrant().getCollections();
-  const exists = collections.collections.some((collection) => collection.name === COLLECTION);
-  if (exists) return;
-
-  await getQdrant().createCollection(COLLECTION, {
-    vectors: {
-      size: VECTOR_SIZE,
-      distance: "Cosine",
-    },
+  const collections = await qdrant().getCollections();
+  if (collections.collections.some((collection) => collection.name === COLLECTION)) return;
+  await qdrant().createCollection(COLLECTION, {
+    vectors: { size: VECTOR_SIZE, distance: "Cosine" },
   });
 }
 
 async function embedText(text) {
-  const response = await getOpenAI().embeddings.create({
-    model: EMBEDDING_MODEL,
-    input: text,
-  });
+  const response = await openai().embeddings.create({ model: EMBEDDING_MODEL, input: text });
   return response.data[0].embedding;
 }
 
 function normalizeSegments(segments) {
   if (!Array.isArray(segments) || segments.length === 0) {
-    throw new HttpsError("invalid-argument", "Provide at least one transcript segment.");
+    throw new ApiError(400, "Provide at least one transcript segment.");
   }
 
   return segments.map((segment, index) => ({
@@ -310,8 +305,8 @@ async function resolveAssemblyAiKey(profile) {
     .limit(1)
     .get();
   if (!snapshot.empty) {
-    const data = snapshot.docs[0].data();
-    const secret = decryptSecret(data.encryptedKey, process.env.API_KEY_ENCRYPTION_SECRET);
+    const keyData = snapshot.docs[0].data();
+    const secret = decryptSecret(keyData.encryptedKey, process.env.API_KEY_ENCRYPTION_SECRET);
     if (secret) return { key: secret, source: "byok" };
   }
 
@@ -323,7 +318,7 @@ async function resolveAssemblyAiKey(profile) {
     return { key: process.env.ASSEMBLYAI_API_KEY, source: "platform" };
   }
 
-  throw new HttpsError("failed-precondition", "Add an AssemblyAI API key on your profile, or ask an admin to enable speaker diarization.");
+  throw new ApiError(412, "Add an AssemblyAI API key on your profile, or ask an admin to enable speaker diarization.");
 }
 
 async function assertAssemblyAiAccess(profile) {
@@ -334,7 +329,7 @@ async function assertAssemblyAiAccess(profile) {
   if (!snapshot.empty) return;
   if (canUseFeature(profile, "speakerDiarization")) return;
   if (isProfileAdmin(profile) && process.env.ASSEMBLYAI_API_KEY) return;
-  throw new HttpsError("permission-denied", "Speaker diarization is not available on your account.");
+  throw new ApiError(403, "Speaker diarization is not available on your account.");
 }
 
 async function resolveOpenAIClient(profile) {
@@ -344,13 +339,13 @@ async function resolveOpenAIClient(profile) {
       .limit(1)
       .get();
     if (!snapshot.empty) {
-      const data = snapshot.docs[0].data();
-      const secret = decryptSecret(data.encryptedKey, process.env.API_KEY_ENCRYPTION_SECRET);
+      const keyData = snapshot.docs[0].data();
+      const secret = decryptSecret(keyData.encryptedKey, process.env.API_KEY_ENCRYPTION_SECRET);
       if (secret) return new OpenAI({ apiKey: secret });
     }
-    throw new HttpsError("failed-precondition", "Add an OpenAI API key on your profile for BYOK plan.");
+    throw new ApiError(412, "Add an OpenAI API key on your profile for BYOK plan.");
   }
-  return getOpenAI();
+  return openai();
 }
 
 async function generateNotesMarkdown(profile, payload) {
@@ -375,36 +370,29 @@ async function generateNotesMarkdown(profile, payload) {
   return { markdown: response.output_text.trim(), mode };
 }
 
-export const saveMeeting = onCall(async (request) => {
-  const profile = await requireUsableUser(request);
+async function saveMeeting(req, data) {
+  const profile = await requireUsableUser(req);
   if (!canUseFeature(profile, "cloudEmbeddings")) {
-    throw new HttpsError("permission-denied", "Cloud save is not available on your account.");
+    throw new ApiError(403, "Cloud save is not available on your account.");
   }
-  const uid = profile.uid;
-  const { title = "Untitled meeting", meetingId: existingMeetingId, generatedNotes } = request.data || {};
-  const segments = normalizeSegments(request.data?.segments);
-
+  const segments = normalizeSegments(data?.segments);
   await ensureCollection();
 
-  const meetingRef = existingMeetingId
-    ? db.collection("users").doc(uid).collection("meetings").doc(existingMeetingId)
-    : db.collection("users").doc(uid).collection("meetings").doc();
-  const meetingId = meetingRef.id;
-  const batch = db.batch();
-
+  const meetingRef = data?.meetingId
+    ? admin().db.collection("users").doc(profile.uid).collection("meetings").doc(data.meetingId)
+    : admin().db.collection("users").doc(profile.uid).collection("meetings").doc();
+  const batch = admin().db.batch();
   const meetingDoc = {
-    title,
+    title: data?.title || "Untitled meeting",
     updatedAt: FieldValue.serverTimestamp(),
     segmentCount: segments.length,
   };
-  if (!existingMeetingId) {
-    meetingDoc.createdAt = FieldValue.serverTimestamp();
-  }
-  if (generatedNotes?.markdown) {
+  if (!data?.meetingId) meetingDoc.createdAt = FieldValue.serverTimestamp();
+  if (data?.generatedNotes?.markdown) {
     meetingDoc.generatedNotes = {
-      mode: generatedNotes.mode || "detail",
-      markdown: String(generatedNotes.markdown),
-      language: generatedNotes.language || "en",
+      mode: data.generatedNotes.mode || "detail",
+      markdown: String(data.generatedNotes.markdown),
+      language: data.generatedNotes.language || "en",
       createdAt: new Date().toISOString(),
     };
   }
@@ -412,20 +400,16 @@ export const saveMeeting = onCall(async (request) => {
 
   const points = [];
   for (const segment of segments) {
-    const segmentRef = meetingRef.collection("segments").doc(segment.id);
-    batch.set(segmentRef, segment);
-
-    const searchText = segment.originalText || segment.text;
-    const vector = await embedText(`${segment.speaker}: ${searchText}`);
+    batch.set(meetingRef.collection("segments").doc(segment.id), segment);
     points.push({
       id: segment.id,
-      vector,
+      vector: await embedText(`${segment.speaker}: ${segment.originalText || segment.text}`),
       payload: {
-        uid,
-        meetingId,
+        uid: profile.uid,
+        meetingId: meetingRef.id,
         speaker: segment.speaker,
         type: segment.type,
-        text: searchText,
+        text: segment.originalText || segment.text,
         panelText: segment.text,
         timestamp: segment.timestamp,
         order: segment.order,
@@ -434,17 +418,15 @@ export const saveMeeting = onCall(async (request) => {
   }
 
   await batch.commit();
-  await getQdrant().upsert(COLLECTION, { wait: true, points });
+  await qdrant().upsert(COLLECTION, { wait: true, points });
+  return { meetingId: meetingRef.id, segmentCount: segments.length };
+}
 
-  return { meetingId, segmentCount: segments.length };
-});
-
-export const listMeetings = onCall(async (request) => {
-  const profile = await requireUsableUser(request);
-  const uid = profile.uid;
-  const snapshot = await db
+async function listMeetings(req) {
+  const profile = await requireUsableUser(req);
+  const snapshot = await admin().db
     .collection("users")
-    .doc(uid)
+    .doc(profile.uid)
     .collection("meetings")
     .orderBy("updatedAt", "desc")
     .limit(50)
@@ -462,88 +444,70 @@ export const listMeetings = onCall(async (request) => {
       };
     }),
   };
-});
+}
 
-export const getMeeting = onCall(async (request) => {
-  const profile = await requireUsableUser(request);
-  const uid = profile.uid;
-  const meetingId = String(request.data?.meetingId || "").trim();
-  if (!meetingId) {
-    throw new HttpsError("invalid-argument", "Provide meetingId.");
-  }
+async function getMeeting(req, data) {
+  const profile = await requireUsableUser(req);
+  const meetingId = String(data?.meetingId || "").trim();
+  if (!meetingId) throw new ApiError(400, "Provide meetingId.");
 
-  const meetingRef = db.collection("users").doc(uid).collection("meetings").doc(meetingId);
+  const meetingRef = admin().db.collection("users").doc(profile.uid).collection("meetings").doc(meetingId);
   const meetingSnap = await meetingRef.get();
-  if (!meetingSnap.exists) {
-    throw new HttpsError("not-found", "Meeting not found.");
-  }
+  if (!meetingSnap.exists) throw new ApiError(404, "Meeting not found.");
 
   const segmentsSnap = await meetingRef.collection("segments").get();
   const segments = segmentsSnap.docs
     .map((doc) => ({ id: doc.id, ...doc.data() }))
     .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
 
-  const data = meetingSnap.data();
+  const meetingData = meetingSnap.data();
   return {
     meeting: {
       id: meetingSnap.id,
-      title: data.title || "Untitled meeting",
-      segmentCount: data.segmentCount || segments.length,
-      generatedNotes: data.generatedNotes || null,
-      createdAt: data.createdAt?.toDate?.().toISOString?.() || null,
-      updatedAt: data.updatedAt?.toDate?.().toISOString?.() || null,
+      title: meetingData.title || "Untitled meeting",
+      segmentCount: meetingData.segmentCount || segments.length,
+      generatedNotes: meetingData.generatedNotes || null,
+      createdAt: meetingData.createdAt?.toDate?.().toISOString?.() || null,
+      updatedAt: meetingData.updatedAt?.toDate?.().toISOString?.() || null,
     },
     segments,
   };
-});
+}
 
-export const askMeeting = onCall(async (request) => {
-  const profile = await requireUsableUser(request);
+async function askMeeting(req, data) {
+  const profile = await requireUsableUser(req);
   if (!canUseFeature(profile, "cloudQA")) {
-    throw new HttpsError("permission-denied", "Cloud Q&A is not available on your account.");
+    throw new ApiError(403, "Cloud Q&A is not available on your account.");
   }
-  const uid = profile.uid;
-  const question = String(request.data?.question || "").trim();
-  const meetingId = String(request.data?.meetingId || "").trim();
-
-  if (!question) {
-    throw new HttpsError("invalid-argument", "Provide a question.");
-  }
+  const question = String(data?.question || "").trim();
+  const meetingId = String(data?.meetingId || "").trim();
+  if (!question) throw new ApiError(400, "Provide a question.");
 
   await ensureCollection();
-  const vector = await embedText(question);
-  const filter = {
-    must: [
-      { key: "uid", match: { value: uid } },
-      ...(meetingId ? [{ key: "meetingId", match: { value: meetingId } }] : []),
-    ],
-  };
-
-  const matches = await getQdrant().search(COLLECTION, {
-    vector,
-    filter,
+  const matches = await qdrant().search(COLLECTION, {
+    vector: await embedText(question),
+    filter: {
+      must: [
+        { key: "uid", match: { value: profile.uid } },
+        ...(meetingId ? [{ key: "meetingId", match: { value: meetingId } }] : []),
+      ],
+    },
     limit: 8,
     with_payload: true,
   });
 
   const context = matches
-    .map((match, index) => {
-      const payload = match.payload || {};
-      return `${index + 1}. [${payload.speaker || "Speaker 1"}] ${payload.text || ""}`;
-    })
+    .map((match, index) => `${index + 1}. [${match.payload?.speaker || "Speaker 1"}] ${match.payload?.text || ""}`)
     .join("\n");
 
-  const response = await getOpenAI().responses.create({
+  const response = await openai().responses.create({
     model: ANSWER_MODEL,
     input: [
       {
         role: "system",
         content: "Answer using only the meeting transcript context. If the context does not contain the answer, say you do not have enough information.",
       },
-      {
-        role: "user",
-        content: `Question: ${question}\n\nMeeting context:\n${context}`,
-      },
+      { role: "user", content: `Question: ${question}\n\nMeeting context:\n${context}` },
     ],
   });
 
@@ -557,41 +521,40 @@ export const askMeeting = onCall(async (request) => {
       meetingId: match.payload?.meetingId,
     })),
   };
-});
+}
 
-export const ensureUserProfile = onCall(async (request) => {
-  const profile = await ensureProfileForRequest(request);
+async function ensureUserProfile(req) {
+  const profile = await ensureProfileForToken(await requireAuth(req));
   return { profile: serializeProfile(profile) };
-});
+}
 
-export const updateUserProfile = onCall(async (request) => {
-  const profile = await ensureProfileForRequest(request);
-  const data = request.data || {};
+async function updateUserProfile(req, data) {
+  const profile = await ensureProfileForToken(await requireAuth(req));
   const updates = {
-    displayName: String(data.displayName || profile.displayName || "").trim(),
-    photoURL: String(data.photoURL || profile.photoURL || "").trim(),
-    preferredLanguage: String(data.preferredLanguage || profile.preferredLanguage || "en").trim(),
-    firstName: data.firstName != null ? String(data.firstName).trim() : profile.firstName,
-    lastName: data.lastName != null ? String(data.lastName).trim() : profile.lastName,
+    displayName: String(data?.displayName || profile.displayName || "").trim(),
+    photoURL: String(data?.photoURL || profile.photoURL || "").trim(),
+    preferredLanguage: String(data?.preferredLanguage || profile.preferredLanguage || "en").trim(),
+    firstName: data?.firstName != null ? String(data.firstName).trim() : profile.firstName,
+    lastName: data?.lastName != null ? String(data.lastName).trim() : profile.lastName,
     updatedAt: FieldValue.serverTimestamp(),
   };
   await profileRef(profile.uid).set(updates, { merge: true });
   return { profile: serializeProfile({ ...profile, ...updates }) };
-});
+}
 
-export const listUsers = onCall(async (request) => {
-  await requireAdmin(request);
-  const snapshot = await db.collection("users").orderBy("createdAt", "desc").limit(100).get();
+async function listUsers(req) {
+  await requireAdmin(req);
+  const snapshot = await admin().db.collection("users").orderBy("createdAt", "desc").limit(100).get();
   return {
     users: snapshot.docs.map((doc) => {
       const data = doc.data();
       return serializeProfile({ uid: doc.id, ...data });
     }),
   };
-});
+}
 
-export const adminUpdateUser = onCall(async (request) => {
-  await requireAdmin(request);
+async function adminUpdateUser(req, data) {
+  await requireAdmin(req);
   const {
     uid,
     action,
@@ -601,11 +564,10 @@ export const adminUpdateUser = onCall(async (request) => {
     amount,
     unit = "days",
     plan,
-  } = request.data || {};
-  if (!uid || !action) throw new HttpsError("invalid-argument", "uid and action are required.");
-
+  } = data || {};
+  if (!uid || !action) throw new ApiError(400, "uid and action are required.");
   const target = await getProfile(uid);
-  if (!target) throw new HttpsError("not-found", "User profile not found.");
+  if (!target) throw new ApiError(404, "User profile not found.");
 
   const updates = { updatedAt: FieldValue.serverTimestamp() };
   const contactEmail = target.contactEmail || target.email;
@@ -635,9 +597,7 @@ export const adminUpdateUser = onCall(async (request) => {
     updates.role = "user";
     updates.roles = rolesForPrimaryRole("user");
   }
-  if (action === "setPlan" && ["free", "paid", "byok"].includes(plan)) {
-    updates.plan = plan;
-  }
+  if (action === "setPlan" && ["free", "paid", "byok"].includes(plan)) updates.plan = plan;
   if (action === "guest") {
     updates.guestApiAccess = true;
     updates.platformApiAccess = "guest";
@@ -650,9 +610,7 @@ export const adminUpdateUser = onCall(async (request) => {
   }
 
   if (["extendFeature", "pauseFeature", "resumeFeature"].includes(action)) {
-    if (!FEATURE_KEYS.includes(featureKey)) {
-      throw new HttpsError("invalid-argument", "Invalid featureKey.");
-    }
+    if (!FEATURE_KEYS.includes(featureKey)) throw new ApiError(400, "Invalid featureKey.");
     const features = { ...(target.features || {}) };
     const current = features[featureKey] || { status: "paused", expiresAt: null, source: "admin" };
     if (action === "pauseFeature") {
@@ -661,33 +619,26 @@ export const adminUpdateUser = onCall(async (request) => {
       features[featureKey] = { ...current, status: "active", source: current.source || "admin" };
     } else {
       const expiresAt = expiryFromValue(amount || 7, unit);
-      features[featureKey] = {
-        status: "active",
-        expiresAt,
-        source: "admin",
-      };
-      if (featureKey === "aiMeetingNotes") {
-        updates.aiNotesTrialEndsAt = expiresAt;
-      }
+      features[featureKey] = { status: "active", expiresAt, source: "admin" };
+      if (featureKey === "aiMeetingNotes") updates.aiNotesTrialEndsAt = expiresAt;
     }
     updates.features = features;
   }
 
   await profileRef(uid).set(updates, { merge: true });
   return { ok: true };
-});
+}
 
-export const adminGenerateTemporaryPassword = onCall(async (request) => {
-  await requireAdmin(request);
-  const { uid } = request.data || {};
-  if (!uid) throw new HttpsError("invalid-argument", "uid is required.");
-  const target = await getProfile(uid);
-  if (!target) throw new HttpsError("not-found", "User profile not found.");
+async function adminGenerateTemporaryPassword(req, data) {
+  await requireAdmin(req);
+  if (!data?.uid) throw new ApiError(400, "uid is required.");
+  const target = await getProfile(data.uid);
+  if (!target) throw new ApiError(404, "User profile not found.");
 
   const tempPassword = `RJ-${randomBytes(6).toString("base64url")}!9`;
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  await auth.updateUser(uid, { password: tempPassword });
-  await profileRef(uid).set({
+  await admin().auth.updateUser(data.uid, { password: tempPassword });
+  await profileRef(data.uid).set({
     temporaryPasswordExpiresAt: expiresAt,
     requiresPasswordChange: true,
     updatedAt: FieldValue.serverTimestamp(),
@@ -700,30 +651,28 @@ export const adminGenerateTemporaryPassword = onCall(async (request) => {
   });
 
   return { ok: true, expiresAt: expiresAt.toISOString() };
-});
+}
 
-export const saveUserApiKey = onCall(async (request) => {
-  const profile = await requireUsableUser(request);
-  const { provider, label, endpoint, apiKey } = request.data || {};
-  const trimmedKey = String(apiKey || "").trim();
-  if (!trimmedKey) throw new HttpsError("invalid-argument", "API key is required.");
+async function saveUserApiKey(req, data) {
+  const profile = await requireUsableUser(req);
+  const trimmedKey = String(data?.apiKey || "").trim();
+  if (!trimmedKey) throw new ApiError(400, "API key is required.");
 
   const keyRef = profileRef(profile.uid).collection("apiKeys").doc();
   await keyRef.set({
-    provider: String(provider || "custom"),
-    label: String(label || provider || "API key"),
-    endpoint: String(endpoint || ""),
+    provider: String(data?.provider || "custom"),
+    label: String(data?.label || data?.provider || "API key"),
+    endpoint: String(data?.endpoint || ""),
     encryptedKey: encryptSecret(trimmedKey),
     last4: trimmedKey.slice(-4),
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   });
-
   return { id: keyRef.id, last4: trimmedKey.slice(-4) };
-});
+}
 
-export const listUserApiKeys = onCall(async (request) => {
-  const profile = await requireUsableUser(request);
+async function listUserApiKeys(req) {
+  const profile = await requireUsableUser(req);
   const snapshot = await profileRef(profile.uid).collection("apiKeys").orderBy("createdAt", "desc").get();
   return {
     keys: snapshot.docs.map((doc) => {
@@ -738,24 +687,23 @@ export const listUserApiKeys = onCall(async (request) => {
       };
     }),
   };
-});
+}
 
-export const deleteUserApiKey = onCall(async (request) => {
-  const profile = await requireUsableUser(request);
-  const { keyId } = request.data || {};
-  if (!keyId) throw new HttpsError("invalid-argument", "keyId is required.");
-  await profileRef(profile.uid).collection("apiKeys").doc(keyId).delete();
+async function deleteUserApiKey(req, data) {
+  const profile = await requireUsableUser(req);
+  if (!data?.keyId) throw new ApiError(400, "keyId is required.");
+  await profileRef(profile.uid).collection("apiKeys").doc(data.keyId).delete();
   return { ok: true };
-});
+}
 
-export const checkUserIdAvailability = onCall(async (request) => {
-  const validation = validateUserId(request.data?.userId);
+async function checkUserIdAvailability(_req, data) {
+  const validation = validateUserId(data?.userId);
   if (!validation.ok) return { available: false, reason: validation.error };
   const snapshot = await userIdsRef(validation.userId).get();
   return { available: !snapshot.exists, userId: validation.userId };
-});
+}
 
-export const registerAccount = onCall(async (request) => {
+async function registerAccount(_req, data) {
   const {
     userId,
     firstName,
@@ -763,26 +711,21 @@ export const registerAccount = onCall(async (request) => {
     contactEmail,
     password,
     confirmPassword,
-  } = request.data || {};
+  } = data || {};
 
   const idValidation = validateUserId(userId);
-  if (!idValidation.ok) throw new HttpsError("invalid-argument", idValidation.error);
+  if (!idValidation.ok) throw new ApiError(400, idValidation.error);
 
   const pwdValidation = validatePassword(password);
-  if (!pwdValidation.ok) throw new HttpsError("invalid-argument", pwdValidation.error);
-  if (password !== confirmPassword) {
-    throw new HttpsError("invalid-argument", "Passwords do not match.");
-  }
+  if (!pwdValidation.ok) throw new ApiError(400, pwdValidation.error);
+  if (password !== confirmPassword) throw new ApiError(400, "Passwords do not match.");
 
   const email = String(contactEmail || "").trim().toLowerCase();
-  if (!email || !email.includes("@")) {
-    throw new HttpsError("invalid-argument", "A valid contact email is required.");
-  }
+  if (!email || !email.includes("@")) throw new ApiError(400, "A valid contact email is required.");
 
   const normalizedUserId = idValidation.userId;
   const registryRef = userIdsRef(normalizedUserId);
-  const existing = await registryRef.get();
-  if (existing.exists) throw new HttpsError("already-exists", "UserID is already taken.");
+  if ((await registryRef.get()).exists) throw new ApiError(409, "UserID is already taken.");
 
   const owner = isPlatformOwner({ userId: normalizedUserId, contactEmail: email });
   const authEmail = internalAuthEmail(normalizedUserId);
@@ -790,13 +733,9 @@ export const registerAccount = onCall(async (request) => {
 
   let createdUser;
   try {
-    createdUser = await auth.createUser({
-      email: authEmail,
-      password,
-      displayName,
-    });
+    createdUser = await admin().auth.createUser({ email: authEmail, password, displayName });
   } catch (error) {
-    throw new HttpsError("internal", error.message || "Could not create account.");
+    throw new ApiError(500, error.message || "Could not create account.");
   }
 
   const featureDefaults = defaultFeaturesForNewUser({ isPlatformAdmin: owner });
@@ -826,12 +765,8 @@ export const registerAccount = onCall(async (request) => {
     lastLoginAt: FieldValue.serverTimestamp(),
   };
 
-  const batch = db.batch();
-  batch.set(registryRef, {
-    uid: createdUser.uid,
-    contactEmail: email,
-    createdAt: FieldValue.serverTimestamp(),
-  });
+  const batch = admin().db.batch();
+  batch.set(registryRef, { uid: createdUser.uid, contactEmail: email, createdAt: FieldValue.serverTimestamp() });
   batch.set(profileRef(createdUser.uid), profile);
   await batch.commit();
 
@@ -843,52 +778,34 @@ export const registerAccount = onCall(async (request) => {
       : `<p>Thanks for signing up as <strong>${normalizedUserId}</strong>. Your account is pending admin approval.</p>`,
   });
 
-  return {
-    uid: createdUser.uid,
-    userId: normalizedUserId,
-    status: profile.status,
-  };
-});
+  return { uid: createdUser.uid, userId: normalizedUserId, status: profile.status };
+}
 
-export const requestPasswordReset = onCall(async (request) => {
-  const validation = validateUserId(request.data?.userId);
-  if (!validation.ok) {
-    return { ok: true, message: "If an account exists, a reset email was sent." };
-  }
+async function requestPasswordReset(_req, data) {
+  const validation = validateUserId(data?.userId);
+  if (!validation.ok) return { ok: true, message: "If an account exists, a reset email was sent." };
 
   const registry = await userIdsRef(validation.userId).get();
-  if (!registry.exists) {
-    return { ok: true, message: "If an account exists, a reset email was sent." };
-  }
+  if (!registry.exists) return { ok: true, message: "If an account exists, a reset email was sent." };
 
   const profile = await getProfile(registry.data().uid);
-  if (!profile) {
-    return { ok: true, message: "If an account exists, a reset email was sent." };
-  }
+  if (!profile) return { ok: true, message: "If an account exists, a reset email was sent." };
 
-  const link = await auth.generatePasswordResetLink(internalAuthEmail(validation.userId));
+  const link = await admin().auth.generatePasswordResetLink(internalAuthEmail(validation.userId));
   await sendEmail({
     to: profile.contactEmail || profile.email,
     subject: "Reset your RJ Meeting Notes Taker password",
     html: `<p>Reset your password for UserID <strong>${validation.userId}</strong>.</p><p><a href="${link}">Reset password</a></p>`,
   });
-
   return { ok: true, message: "If an account exists, a reset email was sent." };
-});
+}
 
-export const requestUserIdReminder = onCall(async (request) => {
-  const email = String(request.data?.contactEmail || "").trim().toLowerCase();
-  if (!email) throw new HttpsError("invalid-argument", "Contact email is required.");
+async function requestUserIdReminder(_req, data) {
+  const email = String(data?.contactEmail || "").trim().toLowerCase();
+  if (!email) throw new ApiError(400, "Contact email is required.");
 
-  const snapshot = await db.collection("users").where("contactEmail", "==", email).limit(20).get();
-  if (snapshot.empty) {
-    return { ok: true, message: "If accounts exist for that email, we sent your UserIDs." };
-  }
-
-  const userIds = snapshot.docs
-    .map((doc) => doc.data().userId)
-    .filter(Boolean);
-
+  const snapshot = await admin().db.collection("users").where("contactEmail", "==", email).limit(20).get();
+  const userIds = snapshot.docs.map((doc) => doc.data().userId).filter(Boolean);
   if (userIds.length) {
     await sendEmail({
       to: email,
@@ -896,62 +813,51 @@ export const requestUserIdReminder = onCall(async (request) => {
       html: `<p>UserIDs linked to this email:</p><ul>${userIds.map((id) => `<li><strong>${id}</strong></li>`).join("")}</ul>`,
     });
   }
-
   return { ok: true, message: "If accounts exist for that email, we sent your UserIDs." };
-});
+}
 
-export const generateMeetingNotes = onCall(async (request) => {
-  const profile = await requireUsableUser(request);
+async function generateMeetingNotes(req, data) {
+  const profile = await requireUsableUser(req);
   if (!canUseFeature(profile, "aiMeetingNotes")) {
-    throw new HttpsError("permission-denied", "AI meeting notes are not available on your account.");
+    throw new ApiError(403, "AI meeting notes are not available on your account.");
   }
-
-  const { title, metadata, sections, segments, mode } = request.data || {};
-  if (!Array.isArray(segments) || !segments.length) {
-    throw new HttpsError("invalid-argument", "Provide transcript segments.");
+  if (!Array.isArray(data?.segments) || !data.segments.length) {
+    throw new ApiError(400, "Provide transcript segments.");
   }
+  return generateNotesMarkdown(profile, data);
+}
 
-  return generateNotesMarkdown(profile, { title, metadata, sections, segments, mode });
-});
+async function translateTranscript(req, data) {
+  const profile = await ensureProfileForToken(await requireAuth(req));
+  const text = String(data?.text || "").trim();
+  const targetLanguage = String(data?.targetLanguage || "en").trim();
+  const sourceLanguage = String(data?.sourceLanguage || "").trim();
+  if (targetLanguage !== "en" && !canUsePanelTranslation(profile)) {
+    throw new ApiError(403, "Panel B translation is not available on your account.");
+  }
+  if (!text) throw new ApiError(400, "Text is required.");
 
-export const translateTranscript = onCall(
-  { timeoutSeconds: 120, memory: "512MiB" },
-  async (request) => {
-    const profile = await ensureProfileForRequest(request);
-    const text = String(request.data?.text || "").trim();
-    const targetLanguage = String(request.data?.targetLanguage || "en").trim();
-    const sourceLanguage = String(request.data?.sourceLanguage || "").trim();
-    const englishPanelDefault = targetLanguage === "en";
-    if (!englishPanelDefault && !canUsePanelTranslation(profile)) {
-      throw new HttpsError(
-        "permission-denied",
-        "Panel B translation is not available on your account. Enable auto-translate or AI meeting notes.",
-      );
-    }
-    if (!text) throw new HttpsError("invalid-argument", "Text is required.");
+  const speakerContext = data?.speakerContext || null;
+  const meetingSpeakers = data?.meetingSpeakers || [];
 
-    const speakerContext = request.data?.speakerContext || null;
-    const meetingSpeakers = request.data?.meetingSpeakers || [];
+  const response = await openai().responses.create({
+    model: ANSWER_MODEL,
+    input: [
+      {
+        role: "system",
+        content: buildTranslationSystemPrompt({
+          sourceLanguage,
+          targetLanguage,
+          speakerContext,
+          meetingSpeakers,
+        }),
+      },
+      { role: "user", content: text },
+    ],
+  });
 
-    const response = await getOpenAI().responses.create({
-      model: ANSWER_MODEL,
-      input: [
-        {
-          role: "system",
-          content: buildTranslationSystemPrompt({
-            sourceLanguage,
-            targetLanguage,
-            speakerContext,
-            meetingSpeakers,
-          }),
-        },
-        { role: "user", content: text },
-      ],
-    });
-
-    return { translation: response.output_text.trim(), targetLanguage, sourceLanguage: sourceLanguage || null };
-  },
-);
+  return { translation: response.output_text.trim(), targetLanguage, sourceLanguage: sourceLanguage || null };
+}
 
 const PRERECORDED_MAX_POLL_ATTEMPTS = 90;
 const PRERECORDED_POLL_MS = 2000;
@@ -964,14 +870,12 @@ async function transcribePrerecorded(key, bytes, { languageCode, speakerLabels =
     body: bytes,
   });
   if (!uploadResponse.ok) {
-    throw new HttpsError("internal", `AssemblyAI upload failed: ${await uploadResponse.text()}`);
+    throw new ApiError(502, `AssemblyAI upload failed: ${await uploadResponse.text()}`);
   }
 
   const uploadData = await uploadResponse.json();
   const uploadUrl = uploadData?.upload_url;
-  if (!uploadUrl) {
-    throw new HttpsError("internal", "AssemblyAI did not return an upload URL.");
-  }
+  if (!uploadUrl) throw new ApiError(502, "AssemblyAI did not return an upload URL.");
 
   const transcriptBody = {
     audio_url: uploadUrl,
@@ -984,21 +888,19 @@ async function transcribePrerecorded(key, bytes, { languageCode, speakerLabels =
     body: JSON.stringify(transcriptBody),
   });
   if (!submitResponse.ok) {
-    throw new HttpsError("internal", `AssemblyAI transcript submit failed: ${await submitResponse.text()}`);
+    throw new ApiError(502, `AssemblyAI transcript submit failed: ${await submitResponse.text()}`);
   }
 
   const submitData = await submitResponse.json();
   const transcriptId = submitData?.id;
-  if (!transcriptId) {
-    throw new HttpsError("internal", "AssemblyAI did not return a transcript id.");
-  }
+  if (!transcriptId) throw new ApiError(502, "AssemblyAI did not return a transcript id.");
 
   for (let attempt = 0; attempt < PRERECORDED_MAX_POLL_ATTEMPTS; attempt += 1) {
     const pollResponse = await fetch(`${ASSEMBLYAI_BASE_URL}/v2/transcript/${transcriptId}`, {
       headers: { Authorization: key },
     });
     if (!pollResponse.ok) {
-      throw new HttpsError("internal", `AssemblyAI poll failed: ${await pollResponse.text()}`);
+      throw new ApiError(502, `AssemblyAI poll failed: ${await pollResponse.text()}`);
     }
 
     const result = await pollResponse.json();
@@ -1011,73 +913,64 @@ async function transcribePrerecorded(key, bytes, { languageCode, speakerLabels =
       };
     }
     if (result.status === "error") {
-      throw new HttpsError("internal", result.error || "AssemblyAI transcription failed.");
+      throw new ApiError(502, result.error || "AssemblyAI transcription failed.");
     }
 
     await new Promise((resolve) => setTimeout(resolve, PRERECORDED_POLL_MS));
   }
 
-  throw new HttpsError("deadline-exceeded", "AssemblyAI transcription timed out.");
+  throw new ApiError(504, "AssemblyAI transcription timed out.");
 }
 
-export const transcribeAudioChunk = onCall(
-  { timeoutSeconds: 300, memory: "512MiB" },
-  async (request) => {
-    const profile = await requireUsableUser(request);
-    await assertAssemblyAiAccess(profile);
-    const { key } = await resolveAssemblyAiKey(profile);
+async function transcribeAudioChunk(req, data) {
+  const profile = await requireUsableUser(req);
+  await assertAssemblyAiAccess(profile);
+  const { key } = await resolveAssemblyAiKey(profile);
 
-    const audioBase64 = String(request.data?.audioBase64 || "").trim();
-    const languageCode = String(request.data?.languageCode || "hi").trim().toLowerCase();
-    const full = Boolean(request.data?.full);
-    const keyterms = Array.isArray(request.data?.keyterms)
-      ? request.data.keyterms.map((term) => String(term || "").trim()).filter(Boolean).slice(0, 200)
-      : [];
+  const audioBase64 = String(data?.audioBase64 || "").trim();
+  const languageCode = String(data?.languageCode || "hi").trim().toLowerCase();
+  const full = Boolean(data?.full);
+  const keyterms = Array.isArray(data?.keyterms)
+    ? data.keyterms.map((term) => String(term || "").trim()).filter(Boolean).slice(0, 200)
+    : [];
 
-    if (!audioBase64) {
-      throw new HttpsError("invalid-argument", "audioBase64 is required.");
-    }
-    if (!languageCode || languageCode.length < 2) {
-      throw new HttpsError("invalid-argument", "languageCode is required.");
-    }
+  if (!audioBase64) throw new ApiError(400, "audioBase64 is required.");
+  if (!languageCode || languageCode.length < 2) throw new ApiError(400, "languageCode is required.");
 
-    let bytes;
-    try {
-      bytes = Buffer.from(audioBase64, "base64");
-    } catch {
-      throw new HttpsError("invalid-argument", "audioBase64 is not valid base64.");
-    }
+  let bytes;
+  try {
+    bytes = Buffer.from(audioBase64, "base64");
+  } catch {
+    throw new ApiError(400, "audioBase64 is not valid base64.");
+  }
 
-    if (!bytes.length) {
-      throw new HttpsError("invalid-argument", "Audio payload is empty.");
-    }
-    if (bytes.length > TRANSCRIBE_AUDIO_MAX_BYTES) {
-      throw new HttpsError(
-        "invalid-argument",
-        full
-          ? "Recording is too large for a final pass. Chunked transcript was kept."
-          : "Audio chunk is too large.",
-      );
-    }
+  if (!bytes.length) throw new ApiError(400, "Audio payload is empty.");
+  if (bytes.length > TRANSCRIBE_AUDIO_MAX_BYTES) {
+    throw new ApiError(
+      400,
+      full
+        ? "Recording is too large for a final pass. Chunked transcript was kept."
+        : "Audio chunk is too large.",
+    );
+  }
 
-    const result = await transcribePrerecorded(key, bytes, {
-      languageCode,
-      speakerLabels: false,
-      keyterms,
-    });
+  const result = await transcribePrerecorded(key, bytes, {
+    languageCode,
+    speakerLabels: false,
+    keyterms,
+  });
 
-    return {
-      text: result.text,
-      utterances: result.utterances,
-      languageCode: result.languageCode,
-      model: result.model,
-      full,
-    };
-  },
-);
+  return {
+    text: result.text,
+    utterances: result.utterances,
+    languageCode: result.languageCode,
+    model: result.model,
+    full,
+  };
+}
 
-export const getAssemblyAiStreamingToken = onCall(async (request) => {
-  const profile = await requireUsableUser(request);
+async function getAssemblyAiStreamingToken(req) {
+  const profile = await requireUsableUser(req);
   await assertAssemblyAiAccess(profile);
   const { key } = await resolveAssemblyAiKey(profile);
 
@@ -1086,31 +979,27 @@ export const getAssemblyAiStreamingToken = onCall(async (request) => {
   });
 
   if (!response.ok) {
-    throw new HttpsError("internal", `AssemblyAI token request failed: ${await response.text()}`);
+    throw new ApiError(502, `AssemblyAI token request failed: ${await response.text()}`);
   }
 
   const data = await response.json();
-  if (!data?.token) {
-    throw new HttpsError("internal", "AssemblyAI did not return a streaming token.");
-  }
+  if (!data?.token) throw new ApiError(502, "AssemblyAI did not return a streaming token.");
 
   const expiresIn = Number(data.expires_in_seconds || data.expires_in || 360);
   return {
     token: data.token,
     expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
   };
-});
+}
 
-export const inferSpeakerNames = onCall(async (request) => {
-  const profile = await requireUsableUser(request);
-  const segments = Array.isArray(request.data?.segments) ? request.data.segments : [];
-  if (!segments.length) {
-    throw new HttpsError("invalid-argument", "Provide transcript segments.");
-  }
+async function inferSpeakerNames(req, data) {
+  const profile = await requireUsableUser(req);
+  const segments = Array.isArray(data?.segments) ? data.segments : [];
+  if (!segments.length) throw new ApiError(400, "Provide transcript segments.");
 
   const canUseAi = canUseFeature(profile, "aiMeetingNotes") || canUseFeature(profile, "autoTranslate");
   if (!canUseAi) {
-    throw new HttpsError("permission-denied", "Speaker name inference requires AI notes or auto-translate access.");
+    throw new ApiError(403, "Speaker name inference requires AI notes or auto-translate access.");
   }
 
   const client = await resolveOpenAIClient(profile);
@@ -1147,4 +1036,51 @@ export const inferSpeakerNames = onCall(async (request) => {
     .filter((item) => !/introduction|self-introduction/i.test(item.suggestedName));
 
   return { suggestions };
-});
+}
+
+const publicActions = new Set([
+  "checkUserIdAvailability",
+  "registerAccount",
+  "requestPasswordReset",
+  "requestUserIdReminder",
+]);
+
+const actions = {
+  adminGenerateTemporaryPassword,
+  adminUpdateUser,
+  askMeeting,
+  checkUserIdAvailability,
+  deleteUserApiKey,
+  ensureUserProfile,
+  generateMeetingNotes,
+  getAssemblyAiStreamingToken,
+  transcribeAudioChunk,
+  inferSpeakerNames,
+  getMeeting,
+  listMeetings,
+  listUserApiKeys,
+  listUsers,
+  registerAccount,
+  requestPasswordReset,
+  requestUserIdReminder,
+  saveMeeting,
+  saveUserApiKey,
+  translateTranscript,
+  updateUserProfile,
+};
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed." });
+    return;
+  }
+
+  try {
+    const { action, data } = req.body || {};
+    if (!actions[action]) throw new ApiError(404, `Unknown action: ${action}`);
+    res.status(200).json(await actions[action](req, data || {}));
+  } catch (error) {
+    const status = error.status || 500;
+    res.status(status).json({ error: error.message || "Unexpected server error." });
+  }
+}

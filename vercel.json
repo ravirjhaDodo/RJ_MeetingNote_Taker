@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "public": true,
+  "rewrites": [
+    {
+      "source": "/api/rj",
+      "destination": "/api/rj"
+    }
+  ],
+  "functions": {
+    "api/rj.js": {
+      "maxDuration": 60
+    }
+  }
+}
