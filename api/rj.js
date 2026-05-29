@@ -19,6 +19,7 @@ import {
   internalAuthEmail,
   INTERNAL_AUTH_DOMAIN,
   isPlatformOwner,
+  isAdminReservedEmail,
   isProfileAdmin,
   normalizeUserId,
   meetingNotesSystemPrompt,
@@ -609,6 +610,23 @@ async function adminUpdateUser(req, data) {
     updates.platformApiAccess = target.plan === "paid" ? "paid" : "trial";
   }
 
+  if (action === "updateDetails") {
+    if (typeof data.contactEmail === "string") {
+      const email = data.contactEmail.trim().toLowerCase();
+      if (email && !email.includes("@")) throw new ApiError(400, "A valid contact email is required.");
+      if (isAdminReservedEmail({ userId: target.userId, contactEmail: email })) {
+        throw new ApiError(403, "This email address is reserved for the platform owner and cannot be assigned to another account.");
+      }
+      updates.contactEmail = email;
+    }
+    if (typeof data.firstName === "string") updates.firstName = data.firstName.trim();
+    if (typeof data.lastName === "string") updates.lastName = data.lastName.trim();
+    const nextFirst = updates.firstName ?? target.firstName ?? "";
+    const nextLast = updates.lastName ?? target.lastName ?? "";
+    const derivedName = `${nextFirst} ${nextLast}`.trim();
+    if (derivedName) updates.displayName = derivedName;
+  }
+
   if (["extendFeature", "pauseFeature", "resumeFeature"].includes(action)) {
     if (!FEATURE_KEYS.includes(featureKey)) throw new ApiError(400, "Invalid featureKey.");
     const features = { ...(target.features || {}) };
@@ -651,6 +669,29 @@ async function adminGenerateTemporaryPassword(req, data) {
   });
 
   return { ok: true, expiresAt: expiresAt.toISOString() };
+}
+
+async function adminDeleteUser(req, data) {
+  const adminProfile = await requireAdmin(req);
+  if (!data?.uid) throw new ApiError(400, "uid is required.");
+  const target = await getProfile(data.uid);
+  if (!target) throw new ApiError(404, "User profile not found.");
+  if (isPlatformOwner({ userId: target.userId })) {
+    throw new ApiError(403, "The platform owner account cannot be deleted.");
+  }
+  if (adminProfile.uid === data.uid) {
+    throw new ApiError(400, "You cannot delete your own account.");
+  }
+
+  try {
+    await admin().auth.deleteUser(data.uid);
+  } catch (error) {
+    if (error?.code !== "auth/user-not-found") throw error;
+  }
+  await admin().db.recursiveDelete(profileRef(data.uid));
+  if (target.userId) await userIdsRef(target.userId).delete();
+
+  return { ok: true };
 }
 
 async function saveUserApiKey(req, data) {
@@ -724,6 +765,9 @@ async function registerAccount(_req, data) {
   if (!email || !email.includes("@")) throw new ApiError(400, "A valid contact email is required.");
 
   const normalizedUserId = idValidation.userId;
+  if (isAdminReservedEmail({ userId: normalizedUserId, contactEmail: email })) {
+    throw new ApiError(403, "This email address is reserved and cannot be used. Please use a different contact email.");
+  }
   const registryRef = userIdsRef(normalizedUserId);
   if ((await registryRef.get()).exists) throw new ApiError(409, "UserID is already taken.");
 
@@ -1051,6 +1095,7 @@ const publicActions = new Set([
 ]);
 
 const actions = {
+  adminDeleteUser,
   adminGenerateTemporaryPassword,
   adminUpdateUser,
   askMeeting,

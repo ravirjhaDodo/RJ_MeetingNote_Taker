@@ -20,6 +20,7 @@ import {
   internalAuthEmail,
   INTERNAL_AUTH_DOMAIN,
   isPlatformOwner,
+  isAdminReservedEmail,
   isProfileAdmin,
   meetingNotesSystemPrompt,
   normalizeUserId,
@@ -649,6 +650,24 @@ export const adminUpdateUser = onCall(async (request) => {
     updates.platformApiAccess = target.plan === "paid" ? "paid" : "trial";
   }
 
+  if (action === "updateDetails") {
+    const details = request.data || {};
+    if (typeof details.contactEmail === "string") {
+      const email = details.contactEmail.trim().toLowerCase();
+      if (email && !email.includes("@")) throw new HttpsError("invalid-argument", "A valid contact email is required.");
+      if (isAdminReservedEmail({ userId: target.userId, contactEmail: email })) {
+        throw new HttpsError("permission-denied", "This email address is reserved for the platform owner and cannot be assigned to another account.");
+      }
+      updates.contactEmail = email;
+    }
+    if (typeof details.firstName === "string") updates.firstName = details.firstName.trim();
+    if (typeof details.lastName === "string") updates.lastName = details.lastName.trim();
+    const nextFirst = updates.firstName ?? target.firstName ?? "";
+    const nextLast = updates.lastName ?? target.lastName ?? "";
+    const derivedName = `${nextFirst} ${nextLast}`.trim();
+    if (derivedName) updates.displayName = derivedName;
+  }
+
   if (["extendFeature", "pauseFeature", "resumeFeature"].includes(action)) {
     if (!FEATURE_KEYS.includes(featureKey)) {
       throw new HttpsError("invalid-argument", "Invalid featureKey.");
@@ -700,6 +719,30 @@ export const adminGenerateTemporaryPassword = onCall(async (request) => {
   });
 
   return { ok: true, expiresAt: expiresAt.toISOString() };
+});
+
+export const adminDeleteUser = onCall(async (request) => {
+  const adminProfile = await requireAdmin(request);
+  const { uid } = request.data || {};
+  if (!uid) throw new HttpsError("invalid-argument", "uid is required.");
+  const target = await getProfile(uid);
+  if (!target) throw new HttpsError("not-found", "User profile not found.");
+  if (isPlatformOwner({ userId: target.userId })) {
+    throw new HttpsError("permission-denied", "The platform owner account cannot be deleted.");
+  }
+  if (adminProfile.uid === uid) {
+    throw new HttpsError("failed-precondition", "You cannot delete your own account.");
+  }
+
+  try {
+    await auth.deleteUser(uid);
+  } catch (error) {
+    if (error?.code !== "auth/user-not-found") throw error;
+  }
+  await db.recursiveDelete(profileRef(uid));
+  if (target.userId) await userIdsRef(target.userId).delete();
+
+  return { ok: true };
 });
 
 export const saveUserApiKey = onCall(async (request) => {
@@ -780,6 +823,9 @@ export const registerAccount = onCall(async (request) => {
   }
 
   const normalizedUserId = idValidation.userId;
+  if (isAdminReservedEmail({ userId: normalizedUserId, contactEmail: email })) {
+    throw new HttpsError("permission-denied", "This email address is reserved and cannot be used. Please use a different contact email.");
+  }
   const registryRef = userIdsRef(normalizedUserId);
   const existing = await registryRef.get();
   if (existing.exists) throw new HttpsError("already-exists", "UserID is already taken.");

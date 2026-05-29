@@ -323,11 +323,13 @@
                 </label>
                 <input id="avatarInput" class="full-input" type="file" accept="image/*">
                 <button id="saveProfileButton" class="primary-button" type="button">Save profile</button>
-                <div class="password-row">
-                  <input id="newPasswordInput" class="full-input" type="password" placeholder="New password">
-                  <button class="icon-button password-toggle" type="button" data-password-target="newPasswordInput" aria-label="Show password" title="Show password">◐</button>
-                </div>
-                <button id="changePasswordButton" class="secondary-button" type="button">Change password</button>
+                <form style="display:contents" autocomplete="off" onsubmit="return false">
+                  <div class="password-row">
+                    <input id="newPasswordInput" class="full-input" type="password" placeholder="New password" autocomplete="new-password">
+                    <button class="icon-button password-toggle" type="button" data-password-target="newPasswordInput" aria-label="Show password" title="Show password">◐</button>
+                  </div>
+                  <button id="changePasswordButton" class="secondary-button" type="button">Change password</button>
+                </form>
               </div>
             </article>
 
@@ -348,10 +350,12 @@
                 </select>
                 <input id="apiKeyLabelInput" class="full-input" type="text" placeholder="Label">
                 <input id="apiEndpointInput" class="full-input" type="url" placeholder="Custom endpoint, optional">
-                <div class="password-row">
-                  <input id="apiKeyInput" class="full-input" type="password" placeholder="API key">
-                  <button class="icon-button password-toggle" type="button" data-password-target="apiKeyInput" aria-label="Show API key" title="Show API key">◐</button>
-                </div>
+                <form style="display:contents" autocomplete="off" onsubmit="return false">
+                  <div class="password-row">
+                    <input id="apiKeyInput" class="full-input" type="password" placeholder="API key" autocomplete="off">
+                    <button class="icon-button password-toggle" type="button" data-password-target="apiKeyInput" aria-label="Show API key" title="Show API key">◐</button>
+                  </div>
+                </form>
                 <button id="saveApiKeyButton" class="primary-button" type="button">Save encrypted key</button>
                 <div id="apiKeysOutput" class="answer-output">Saved keys will show here masked.</div>
               </div>
@@ -360,14 +364,20 @@
         </section>
 
         <section id="adminPage" class="page-section is-hidden">
-          <article class="notes-panel form-panel">
+          <article class="notes-panel form-panel admin-panel">
             <div class="panel-header">
               <div>
                 <p class="label">Platform admin</p>
                 <h2>User approval and access</h2>
               </div>
-              <button id="refreshUsersButton" class="secondary-button" type="button">Refresh users</button>
-              <a href="help/admin-guide.html#feature-access">Admin guide</a>
+              <div class="admin-header-actions">
+                <a class="admin-guide-link" href="help/admin-guide.html#feature-access">Admin guide</a>
+                <button id="refreshUsersButton" class="secondary-button" type="button">Refresh users</button>
+              </div>
+            </div>
+            <div class="admin-toolbar">
+              <input id="adminUserSearch" class="admin-search" type="search" placeholder="Search by name, UserID, or email" autocomplete="off">
+              <span id="adminUserCount" class="admin-count"></span>
             </div>
             <div id="adminUsersOutput" class="admin-users"></div>
           </article>

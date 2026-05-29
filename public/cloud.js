@@ -39,6 +39,7 @@ let ensureUserProfileCall = null;
 let updateUserProfileCall = null;
 let listUsersCall = null;
 let adminUpdateUserCall = null;
+let adminDeleteUserCall = null;
 let adminGenerateTemporaryPasswordCall = null;
 let saveUserApiKeyCall = null;
 let listUserApiKeysCall = null;
@@ -97,6 +98,7 @@ if (hasConfig) {
   updateUserProfileCall = httpsCallable(functions, "updateUserProfile");
   listUsersCall = httpsCallable(functions, "listUsers");
   adminUpdateUserCall = httpsCallable(functions, "adminUpdateUser");
+  adminDeleteUserCall = httpsCallable(functions, "adminDeleteUser");
   adminGenerateTemporaryPasswordCall = httpsCallable(functions, "adminGenerateTemporaryPassword");
   saveUserApiKeyCall = httpsCallable(functions, "saveUserApiKey");
   listUserApiKeysCall = httpsCallable(functions, "listUserApiKeys");
@@ -303,6 +305,11 @@ async function adminGenerateTemporaryPassword(uid) {
   return callBackend("adminGenerateTemporaryPassword", { uid }, adminGenerateTemporaryPasswordCall);
 }
 
+async function adminDeleteUser(uid) {
+  requireUser();
+  return callBackend("adminDeleteUser", { uid }, adminDeleteUserCall);
+}
+
 async function saveUserApiKey(data) {
   requireUser();
   return callBackend("saveUserApiKey", data, saveUserApiKeyCall);
@@ -432,6 +439,7 @@ window.RJCloud = {
   listUsers,
   adminUpdateUser,
   adminGenerateTemporaryPassword,
+  adminDeleteUser,
   saveUserApiKey,
   listUserApiKeys,
   deleteUserApiKey,

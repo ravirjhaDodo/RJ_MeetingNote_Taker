@@ -136,6 +136,8 @@ const els = {
   apiKeysOutput: document.querySelector("#apiKeysOutput"),
   refreshUsersButton: document.querySelector("#refreshUsersButton"),
   adminUsersOutput: document.querySelector("#adminUsersOutput"),
+  adminUserSearch: document.querySelector("#adminUserSearch"),
+  adminUserCount: document.querySelector("#adminUserCount"),
   promptAfterMinutesInput: document.querySelector("#promptAfterMinutesInput"),
   stopAfterMinutesInput: document.querySelector("#stopAfterMinutesInput"),
   saveListenSettingsButton: document.querySelector("#saveListenSettingsButton"),
@@ -1772,63 +1774,186 @@ async function refreshApiKeys() {
   }
 }
 
-function formatFeatureLine(feature) {
-  if (!feature) return "n/a";
-  const exp = feature.expiresAt ? ` until ${new Date(feature.expiresAt).toLocaleDateString()}` : "";
+const ADMIN_FEATURE_KEYS = ["aiMeetingNotes", "cloudQA", "cloudEmbeddings", "autoTranslate", "speakerDiarization"];
+const ADMIN_FEATURE_LABELS = {
+  aiMeetingNotes: "AI notes",
+  cloudQA: "Cloud Q&A",
+  cloudEmbeddings: "Cloud save",
+  autoTranslate: "Auto-translate",
+  speakerDiarization: "Diarization",
+};
+
+function adminStatusTone(status) {
+  switch (String(status || "").toLowerCase()) {
+    case "active": return "ok";
+    case "pending": return "warn";
+    case "paused": return "muted";
+    case "rejected":
+    case "revoked": return "danger";
+    default: return "muted";
+  }
+}
+
+function adminFeatureTone(feature) {
+  if (!feature) return "muted";
+  const status = String(feature.status || "").toLowerCase();
+  if (status === "active") {
+    if (feature.expiresAt && new Date(feature.expiresAt) < new Date()) return "danger";
+    return "ok";
+  }
+  if (status === "paused") return "muted";
+  if (status === "expired") return "danger";
+  return "muted";
+}
+
+function adminBadge(text, tone) {
+  return `<span class="admin-badge admin-badge--${tone}">${escapeHtml(text)}</span>`;
+}
+
+function adminInitials(user) {
+  const base = String(user.displayName || user.userId || user.email || "?").trim();
+  const parts = base.split(/\s+/).filter(Boolean);
+  const letters = parts.length >= 2 ? parts[0][0] + parts[1][0] : base.slice(0, 2);
+  return letters.toUpperCase();
+}
+
+function adminFeatureStatusText(feature) {
+  if (!feature) return "not set";
+  const exp = feature.expiresAt ? ` · until ${new Date(feature.expiresAt).toLocaleDateString()}` : "";
   return `${feature.status}${exp}`;
 }
 
-async function refreshAdminUsers() {
-  try {
-    const users = await window.RJCloud.listUsers();
-    const featureOptions = ["aiMeetingNotes", "cloudQA", "cloudEmbeddings", "autoTranslate", "speakerDiarization"];
-    els.adminUsersOutput.innerHTML = users.map((user) => `
-      <div class="admin-user">
-        <div>
+function renderAdminUserCard(user) {
+  const roles = (user.roles || [user.role]).filter(Boolean);
+  const roleText = roles.join(", ") || user.role || "user";
+  const plan = user.plan || "free";
+  const status = user.status || "unknown";
+  const searchBlob = [user.displayName, user.userId, user.contactEmail, user.email]
+    .filter(Boolean).join(" ").toLowerCase();
+
+  const featureRows = ADMIN_FEATURE_KEYS.map((key) => {
+    const feature = user.features?.[key];
+    return `
+      <div class="admin-feature" data-feature-key="${key}">
+        <span class="admin-feature__name">${escapeHtml(ADMIN_FEATURE_LABELS[key] || key)}</span>
+        ${adminBadge(adminFeatureStatusText(feature), adminFeatureTone(feature))}
+        <span class="admin-feature__duration">
+          <input type="number" min="1" value="7" data-feature-amount aria-label="${escapeHtml(key)} amount">
+          <select data-feature-unit aria-label="${escapeHtml(key)} unit">
+            <option value="days">days</option>
+            <option value="weeks">weeks</option>
+            <option value="months">months</option>
+            <option value="years">years</option>
+          </select>
+        </span>
+        <span class="admin-feature__actions">
+          <button type="button" class="admin-btn admin-btn--primary" data-admin-action="extendFeature">Extend</button>
+          <button type="button" class="admin-btn" data-admin-action="pauseFeature">Pause</button>
+          <button type="button" class="admin-btn" data-admin-action="resumeFeature">Resume</button>
+        </span>
+      </div>`;
+  }).join("");
+
+  return `
+    <article class="admin-card" data-admin-user="${escapeHtml(user.uid)}" data-search="${escapeHtml(searchBlob)}">
+      <header class="admin-card__head">
+        <span class="admin-card__avatar" aria-hidden="true">${escapeHtml(adminInitials(user))}</span>
+        <div class="admin-card__id">
           <strong>${escapeHtml(user.displayName || user.userId || user.uid)}</strong>
-          <p>UserID: <strong>${escapeHtml(user.userId || "—")}</strong> · ${escapeHtml(user.contactEmail || user.email || "")}</p>
-          <p>Status: <strong>${escapeHtml(user.status || "")}</strong> · Roles: <strong>${escapeHtml((user.roles || [user.role]).filter(Boolean).join(", ") || user.role || "")}</strong> · Plan: ${escapeHtml(user.plan || "free")}</p>
-          <p>AI notes: ${formatFeatureLine(user.features?.aiMeetingNotes)} · Q&A: ${formatFeatureLine(user.features?.cloudQA)}</p>
-          <p>Embeddings: ${formatFeatureLine(user.features?.cloudEmbeddings)} · Translate: ${formatFeatureLine(user.features?.autoTranslate)} · Diarization: ${formatFeatureLine(user.features?.speakerDiarization)}</p>
+          <span class="admin-card__meta">@${escapeHtml(user.userId || "—")} · ${escapeHtml(user.contactEmail || user.email || "no email")}</span>
         </div>
-        <div class="admin-user-actions" data-admin-user="${escapeHtml(user.uid)}">
-          <button type="button" data-admin-action="approve">Approve</button>
-          <button type="button" data-admin-action="reject">Reject</button>
-          <button type="button" data-admin-action="pause">Pause</button>
-          <button type="button" data-admin-action="revoke">Revoke</button>
-          <button type="button" data-admin-action="guest">Guest 10d</button>
-          <button type="button" data-admin-action="stopGuest">Stop guest</button>
-          <button type="button" data-admin-action="makeAdmin">Make admin</button>
-          <button type="button" data-admin-action="makeUser">Make user</button>
-          <button type="button" data-admin-temp="true">Temp password</button>
-          <div class="admin-feature-row">
-            <select data-admin-plan>
-              <option value="free" ${user.plan === "free" ? "selected" : ""}>free</option>
-              <option value="paid" ${user.plan === "paid" ? "selected" : ""}>paid</option>
-              <option value="byok" ${user.plan === "byok" ? "selected" : ""}>byok</option>
-            </select>
-            <button type="button" data-admin-action="setPlan">Set plan</button>
-          </div>
-          ${featureOptions.map((key) => `
-            <div class="admin-feature-row" data-feature-key="${key}">
-              <span>${key}</span>
-              <input type="number" min="1" value="7" data-feature-amount>
-              <select data-feature-unit>
-                <option value="days">days</option>
-                <option value="weeks">weeks</option>
-                <option value="months">months</option>
-                <option value="years">years</option>
-              </select>
-              <button type="button" data-admin-action="extendFeature">Extend</button>
-              <button type="button" data-admin-action="pauseFeature">Pause</button>
-              <button type="button" data-admin-action="resumeFeature">Resume</button>
-            </div>
-          `).join("")}
+        <div class="admin-card__badges">
+          ${adminBadge(status, adminStatusTone(status))}
+          ${adminBadge(roleText, roles.includes("admin") ? "info" : "muted")}
+          ${adminBadge(`plan: ${plan}`, "neutral")}
+        </div>
+      </header>
+
+      <div class="admin-card__section">
+        <span class="admin-card__label">Account</span>
+        <div class="admin-btn-group">
+          <button type="button" class="admin-btn admin-btn--primary" data-admin-action="approve">Approve</button>
+          <button type="button" class="admin-btn" data-admin-action="pause">Pause</button>
+          <button type="button" class="admin-btn admin-btn--danger" data-admin-action="reject">Reject</button>
+          <button type="button" class="admin-btn admin-btn--danger" data-admin-action="revoke">Revoke</button>
+          <button type="button" class="admin-btn" data-admin-action="makeAdmin">Make admin</button>
+          <button type="button" class="admin-btn" data-admin-action="makeUser">Make user</button>
+          <button type="button" class="admin-btn" data-admin-action="guest">Guest 10d</button>
+          <button type="button" class="admin-btn" data-admin-action="stopGuest">Stop guest</button>
+          <button type="button" class="admin-btn" data-admin-temp="true">Temp password</button>
         </div>
       </div>
-    `).join("");
+
+      <div class="admin-card__section">
+        <span class="admin-card__label">Details</span>
+        <div class="admin-details">
+          <input type="text" class="admin-input" data-edit-firstname value="${escapeHtml(user.firstName || "")}" placeholder="First name" aria-label="First name">
+          <input type="text" class="admin-input" data-edit-lastname value="${escapeHtml(user.lastName || "")}" placeholder="Last name" aria-label="Last name">
+          <input type="email" class="admin-input admin-input--wide" data-edit-email value="${escapeHtml(user.contactEmail || "")}" placeholder="Contact email" aria-label="Contact email">
+          <button type="button" class="admin-btn admin-btn--primary" data-admin-action="updateDetails">Save details</button>
+        </div>
+      </div>
+
+      <div class="admin-card__section">
+        <span class="admin-card__label">Plan</span>
+        <div class="admin-inline">
+          <select data-admin-plan aria-label="Plan">
+            <option value="free" ${plan === "free" ? "selected" : ""}>free</option>
+            <option value="paid" ${plan === "paid" ? "selected" : ""}>paid</option>
+            <option value="byok" ${plan === "byok" ? "selected" : ""}>byok</option>
+          </select>
+          <button type="button" class="admin-btn admin-btn--primary" data-admin-action="setPlan">Set plan</button>
+        </div>
+      </div>
+
+      <div class="admin-card__section">
+        <span class="admin-card__label">Features</span>
+        <div class="admin-feature-table">${featureRows}</div>
+      </div>
+
+      <div class="admin-card__section admin-card__section--danger">
+        <span class="admin-card__label">Danger zone</span>
+        <div class="admin-btn-group">
+          <button type="button" class="admin-btn admin-btn--danger" data-admin-action="deleteUser" data-user-label="${escapeHtml(user.displayName || user.userId || user.uid)}">Delete user</button>
+        </div>
+      </div>
+    </article>`;
+}
+
+function applyAdminUserFilter() {
+  const query = String(els.adminUserSearch?.value || "").trim().toLowerCase();
+  const cards = els.adminUsersOutput.querySelectorAll(".admin-card");
+  let visible = 0;
+  cards.forEach((card) => {
+    const match = !query || (card.dataset.search || "").includes(query);
+    card.classList.toggle("is-hidden", !match);
+    if (match) visible += 1;
+  });
+  if (els.adminUserCount) {
+    els.adminUserCount.textContent = query
+      ? `${visible} of ${cards.length} users`
+      : `${cards.length} user${cards.length === 1 ? "" : "s"}`;
+  }
+}
+
+async function refreshAdminUsers() {
+  const scrollY = window.scrollY;
+  const restoreScroll = () => window.scrollTo({ top: scrollY });
+  try {
+    if (!els.adminUsersOutput.children.length) {
+      els.adminUsersOutput.innerHTML = `<p class="admin-empty">Loading users…</p>`;
+    }
+    const users = await window.RJCloud.listUsers();
+    if (!users.length) {
+      els.adminUsersOutput.innerHTML = `<p class="admin-empty">No users yet.</p>`;
+      if (els.adminUserCount) els.adminUserCount.textContent = "0 users";
+      return;
+    }
+    els.adminUsersOutput.innerHTML = users.map(renderAdminUserCard).join("");
+    applyAdminUserFilter();
+    restoreScroll();
   } catch (error) {
-    els.adminUsersOutput.textContent = error.message || "Could not load users.";
+    els.adminUsersOutput.innerHTML = `<p class="admin-empty admin-empty--error">${escapeHtml(error.message || "Could not load users.")}</p>`;
   }
 }
 
@@ -2949,8 +3074,16 @@ async function generateAiMeetingNotes(mode) {
     state.generatedNotesMode = result.mode || mode;
     renderGeneratedNotesMarkdown(state.generatedNotesMarkdown);
     setStatus("Meeting notes ready", false);
+  } catch (error) {
+    els.generatedNotesOutput.textContent = error.message || "Could not generate meeting notes.";
+    setStatus("AI notes failed", false);
+    return;
+  }
 
-    if (window.RJCloud?.user) {
+  // Cloud save is best-effort and separate: a save failure (e.g. account pending
+  // or cloud save not enabled) must never clear the notes already shown above.
+  if (window.RJCloud?.user) {
+    try {
       const saveResult = await window.RJCloud.saveMeeting({
         title: meetingTitle(),
         segments: serializedSegments(),
@@ -2963,10 +3096,9 @@ async function generateAiMeetingNotes(mode) {
       });
       state.lastCloudMeetingId = saveResult.meetingId;
       setStatus("Notes saved to cloud", false);
+    } catch (error) {
+      setStatus(`Notes ready (not saved to cloud: ${error.message || "save unavailable"})`, false);
     }
-  } catch (error) {
-    els.generatedNotesOutput.textContent = error.message || "Could not generate meeting notes.";
-    setStatus("AI notes failed", false);
   }
 }
 
@@ -3297,9 +3429,15 @@ els.apiKeysOutput.addEventListener("click", async (event) => {
   await refreshApiKeys();
 });
 els.refreshUsersButton.addEventListener("click", refreshAdminUsers);
+els.adminUserSearch?.addEventListener("input", applyAdminUserFilter);
 els.adminUsersOutput.addEventListener("click", async (event) => {
   const container = event.target.closest("[data-admin-user]");
   if (!container) return;
+  // Only act on real action buttons. Clicking the plan select, number inputs,
+  // unit dropdowns, labels, etc. must NOT trigger a refresh (which would rebuild
+  // the list, close the dropdown, and jump the scroll position).
+  const actionEl = event.target.closest("[data-admin-action], [data-admin-temp]");
+  if (!actionEl) return;
   const uid = container.dataset.adminUser;
   try {
     if (event.target.dataset.adminTemp) {
@@ -3307,6 +3445,19 @@ els.adminUsersOutput.addEventListener("click", async (event) => {
     } else if (event.target.dataset.adminAction === "setPlan") {
       const planSelect = container.querySelector("[data-admin-plan]");
       await window.RJCloud.adminUpdateUser({ uid, action: "setPlan", plan: planSelect.value });
+    } else if (event.target.dataset.adminAction === "updateDetails") {
+      await window.RJCloud.adminUpdateUser({
+        uid,
+        action: "updateDetails",
+        firstName: container.querySelector("[data-edit-firstname]").value,
+        lastName: container.querySelector("[data-edit-lastname]").value,
+        contactEmail: container.querySelector("[data-edit-email]").value,
+      });
+    } else if (event.target.dataset.adminAction === "deleteUser") {
+      const label = event.target.dataset.userLabel || "this user";
+      const confirmed = window.confirm(`Permanently delete ${label}? This removes their login, profile, and all saved meetings. This cannot be undone.`);
+      if (!confirmed) return;
+      await window.RJCloud.adminDeleteUser(uid);
     } else if (["extendFeature", "pauseFeature", "resumeFeature"].includes(event.target.dataset.adminAction)) {
       const row = event.target.closest("[data-feature-key]");
       await window.RJCloud.adminUpdateUser({

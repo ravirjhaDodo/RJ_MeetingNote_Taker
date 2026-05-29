@@ -301,9 +301,21 @@ export function decryptSecret(payload, encryptionSecret) {
   return decrypted.toString("utf8");
 }
 
-export function isPlatformOwner({ userId, contactEmail }) {
-  return normalizeUserId(userId) === PLATFORM_OWNER_USER_ID
-    || String(contactEmail || "").toLowerCase() === PLATFORM_ADMIN_EMAIL;
+export function isPlatformOwner({ userId }) {
+  // Owner is identified ONLY by the unique, controlled UserID. The contact email
+  // is user-supplied and unverified, so it must never grant owner/admin rights
+  // (otherwise anyone signing up with the owner's email becomes admin).
+  return normalizeUserId(userId) === PLATFORM_OWNER_USER_ID;
+}
+
+/**
+ * The platform admin email is reserved exclusively for the owner UserID.
+ * Any other account attempting to use it as a contact email must be rejected,
+ * even though ordinary contact emails may be shared across multiple accounts.
+ */
+export function isAdminReservedEmail({ userId, contactEmail }) {
+  return String(contactEmail || "").trim().toLowerCase() === PLATFORM_ADMIN_EMAIL
+    && normalizeUserId(userId) !== PLATFORM_OWNER_USER_ID;
 }
 
 export function buildSpeakerInferencePrompt(segments) {
