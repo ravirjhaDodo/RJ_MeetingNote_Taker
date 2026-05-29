@@ -7,6 +7,7 @@
     "start": "node scripts/run-emulators.js emulators:start",
     "serve": "node scripts/run-emulators.js emulators:start --only hosting,functions,firestore,auth",
     "serve:lite": "node scripts/run-emulators.js emulators:start --only hosting,functions,auth",
+    "dev": "node scripts/dev-server.js",
     "deploy": "npx firebase deploy",
     "vercel:dev": "vercel dev --listen 127.0.0.1:4175",
     "functions:install": "npm --prefix functions install",

@@ -40,7 +40,7 @@
         if (submitButton) submitButton.disabled = !ready;
         if (!ready) {
           message.textContent = "Firebase is not configured. Add public/firebase-config.local.js for local login.";
-        } else if (window.RJ_USE_FIREBASE_EMULATORS) {
+        } else if (window.RJCloud?.usingEmulators) {
           message.textContent = "Local emulators: if login fails after a restart, run npm run seed:emulator in the project folder.";
         } else {
           message.textContent = "";

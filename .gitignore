@@ -10,3 +10,4 @@ functions/node_modules/
 functions/.env
 functions/.env.local
 public/firebase-config.local.js
+.vercel

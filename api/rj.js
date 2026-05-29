@@ -770,13 +770,18 @@ async function registerAccount(_req, data) {
   batch.set(profileRef(createdUser.uid), profile);
   await batch.commit();
 
-  await sendEmail({
-    to: email,
-    subject: owner ? "RJ Meeting Notes Taker owner account ready" : "RJ Meeting Notes Taker signup received",
-    html: owner
-      ? `<p>Your owner account <strong>${normalizedUserId}</strong> is active.</p>`
-      : `<p>Thanks for signing up as <strong>${normalizedUserId}</strong>. Your account is pending admin approval.</p>`,
-  });
+  // Account is already created above; a failed notification email must not fail signup.
+  try {
+    await sendEmail({
+      to: email,
+      subject: owner ? "RJ Meeting Notes Taker owner account ready" : "RJ Meeting Notes Taker signup received",
+      html: owner
+        ? `<p>Your owner account <strong>${normalizedUserId}</strong> is active.</p>`
+        : `<p>Thanks for signing up as <strong>${normalizedUserId}</strong>. Your account is pending admin approval.</p>`,
+    });
+  } catch (error) {
+    console.warn(`registerAccount: signup email to ${email} failed (account still created): ${error?.message || error}`);
+  }
 
   return { uid: createdUser.uid, userId: normalizedUserId, status: profile.status };
 }
@@ -1069,7 +1074,27 @@ const actions = {
   updateUserProfile,
 };
 
+function applyCors(req, res) {
+  const origin = String(req.headers.origin || "");
+  const allowed =
+    /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin) ||
+    /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin);
+  if (allowed) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Max-Age", "86400");
+  }
+  return allowed;
+}
+
 export default async function handler(req, res) {
+  applyCors(req, res);
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed." });
     return;

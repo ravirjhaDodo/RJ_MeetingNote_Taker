@@ -111,19 +111,26 @@ Admins extend/pause/resume each feature with days/weeks/months/years via Admin U
 
 ### Backend mode in `public/firebase-config.local.js`
 
-**Vercel API (production-like):**
+This file is **gitignored and never deployed** (enforced by `.vercelignore`). The committed `firebase-config.js` is the production default (emulators off, vercel backend).
+
+**Default local = behaves exactly like prod** (real Firebase Auth + real deployed `/api/rj`, no Java/emulators needed):
 
 ```js
-window.RJ_BACKEND_MODE = "vercel";
 window.RJ_USE_FIREBASE_EMULATORS = false;
+window.RJ_BACKEND_MODE = "vercel";
+window.RJ_API_BASE_URL = "https://rj-meeting-note-taker.vercel.app/api/rj";
 ```
 
-**Firebase emulators:**
+`/api/rj` returns scoped CORS headers for `localhost`/`127.0.0.1` and `*.vercel.app` origins, so a local static page can call the real production API. Other origins get no CORS header.
+
+**Firebase emulators (optional):**
 
 ```js
 window.RJ_BACKEND_MODE = "firebase";
 window.RJ_USE_FIREBASE_EMULATORS = true;
 ```
+
+**Production safety:** `cloud.js` only connects to the `127.0.0.1` Auth/Functions emulators when the page is actually served from a localhost hostname. Even if a local config flag leaks into a deployment, production never points at `127.0.0.1`.
 
 ## npm Scripts
 
@@ -172,11 +179,16 @@ git checkout dev1
 
 ## Vercel Deployment
 
+- **Live production URL:** https://rj-meeting-note-taker.vercel.app
+- Vercel project: `ravi-jhas-projects-ea51c036/rj-meeting-note-taker` (Hobby/free plan)
 - Static files from `public/`; API at `/api/rj`
-- Set all variables from `.env.local.example` in Vercel project settings
-- Production client config: emulators **off**, `RJ_BACKEND_MODE = "vercel"`
-- Add Vercel domain to Firebase Auth authorized domains
+- Production Firebase **web** config is committed in `public/firebase-config.js` (public, non-secret); `firebase-config.local.js` overrides it for local emulator dev only
+- Deploy via CLI from repo root: `vercel --prod` (env vars already set in Vercel)
+- Set/refresh server env vars from `.env.local`: `vercel env add <NAME> production` (all `.env.local.example` keys)
+- Production client config defaults: emulators **off**, `RJ_BACKEND_MODE = "vercel"`
+- **Required after first deploy:** add `rj-meeting-note-taker.vercel.app` to Firebase Auth authorized domains (Console → Authentication → Settings) or login/signup fails with `auth/unauthorized-domain`
 - Deploy Firestore rules: `npx firebase deploy --only firestore`
+- Seed owner in production Firestore: `npm run seed:owner`
 
 ## Required Secrets (root `.env.local`)
 

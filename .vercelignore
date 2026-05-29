@@ -1,0 +1,12 @@
+# Local-only files that must never reach production.
+# Vercel deploys from the filesystem (not git), so .gitignore alone is not enough.
+public/firebase-config.local.js
+functions/.env.local
+.env
+.env.local
+.cursor
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+ui-debug.log
+.vercel

@@ -835,13 +835,18 @@ export const registerAccount = onCall(async (request) => {
   batch.set(profileRef(createdUser.uid), profile);
   await batch.commit();
 
-  await sendEmail({
-    to: email,
-    subject: owner ? "RJ Meeting Notes Taker owner account ready" : "RJ Meeting Notes Taker signup received",
-    html: owner
-      ? `<p>Your owner account <strong>${normalizedUserId}</strong> is active.</p>`
-      : `<p>Thanks for signing up as <strong>${normalizedUserId}</strong>. Your account is pending admin approval.</p>`,
-  });
+  // Account is already created above; a failed notification email must not fail signup.
+  try {
+    await sendEmail({
+      to: email,
+      subject: owner ? "RJ Meeting Notes Taker owner account ready" : "RJ Meeting Notes Taker signup received",
+      html: owner
+        ? `<p>Your owner account <strong>${normalizedUserId}</strong> is active.</p>`
+        : `<p>Thanks for signing up as <strong>${normalizedUserId}</strong>. Your account is pending admin approval.</p>`,
+    });
+  } catch (error) {
+    console.warn(`registerAccount: signup email to ${email} failed (account still created): ${error?.message || error}`);
+  }
 
   return {
     uid: createdUser.uid,

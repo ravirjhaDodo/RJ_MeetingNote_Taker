@@ -29,7 +29,7 @@ export function internalAuthEmail(userId) {
 
 export function formatAuthError(error) {
   const code = String(error?.code || "");
-  const usingEmulators = Boolean(window.RJ_USE_FIREBASE_EMULATORS);
+  const usingEmulators = Boolean(window.RJCloud?.usingEmulators);
   const emulatorHint = usingEmulators
     ? " Start emulators (npm run serve), then run: npm run seed:emulator"
     : "";

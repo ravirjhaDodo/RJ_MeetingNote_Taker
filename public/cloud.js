@@ -57,7 +57,11 @@ let currentProfile = null;
 let hasAssemblyAiKeyCached = false;
 const backendMode = window.RJ_BACKEND_MODE || "vercel";
 const apiEndpoint = window.RJ_API_BASE_URL || "/api/rj";
-const usingEmulators = Boolean(window.RJ_USE_FIREBASE_EMULATORS);
+// Emulators are a localhost-only concept. Even if a stray local config sets the
+// flag, never connect to 127.0.0.1 unless the page is actually served locally —
+// this guarantees production never points at emulator endpoints.
+const isLocalHost = ["localhost", "127.0.0.1", "::1", "[::1]", ""].includes(window.location.hostname);
+const usingEmulators = Boolean(window.RJ_USE_FIREBASE_EMULATORS) && isLocalHost;
 
 function localBackendHint() {
   if (backendMode !== "vercel") return "";
@@ -80,7 +84,7 @@ if (hasConfig) {
   storage = getStorage(app);
   const functions = getFunctions(app, "us-central1");
 
-  if (window.RJ_USE_FIREBASE_EMULATORS) {
+  if (usingEmulators) {
     connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
     connectFunctionsEmulator(functions, "127.0.0.1", 5001);
   }
