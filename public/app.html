@@ -42,54 +42,94 @@
         </section>
 
         <section class="controls" aria-label="Meeting controls">
-          <button id="startButton" class="primary-button" type="button">Start listening</button>
-          <button id="newMeetingButton" class="secondary-button" type="button">New meeting</button>
-          <button id="stopButton" class="icon-button" type="button" disabled aria-label="Stop listening" title="Stop listening">■</button>
-          <button id="sampleButton" class="secondary-button" type="button">Load sample meeting</button>
-          <label class="speaker-control">
-            <span>Speaker</span>
-            <input id="speakerInput" type="text" list="speakerList" placeholder="Speaker 1">
-          </label>
-          <datalist id="speakerList"></datalist>
-          <label class="speaker-control">
-            <span>Listen language</span>
-            <select id="listenLanguageSelect">
-              <option value="en-US" selected>English</option>
-              <option value="mixed">Mixed (auto-detect spoken language)</option>
-              <option value="hi-IN">Hindi</option>
-              <option value="pa-IN">Punjabi</option>
-              <option value="es-ES">Spanish</option>
-              <option value="fr-FR">French</option>
-              <option value="pt-BR">Portuguese</option>
-              <option value="de-DE">German</option>
-              <option value="ta-IN">Tamil</option>
-              <option value="zh-CN">Chinese</option>
-              <option value="ar-SA">Arabic</option>
-            </select>
-          </label>
-          <p id="listenLanguageHint" class="helper-text">For English speech, choose English (not Mixed). Stop listening before changing language.</p>
-          <label class="toggle">
-            <input id="multiSpeakerToggle" type="checkbox">
-            <span>Multi-speaker (AssemblyAI)</span>
-          </label>
-          <p id="multiSpeakerHint" class="helper-text multi-speaker-hint"></p>
-          <label class="toggle">
-            <input id="hindiAccuracyToggle" type="checkbox">
-            <span>High-accuracy Hindi (pinned language)</span>
-          </label>
-          <p id="hindiAccuracyHint" class="helper-text hindi-accuracy-hint"></p>
-          <label class="toggle">
-            <input id="autoTranslateToEnglishToggle" type="checkbox">
-            <span>Translate Panel B live (uses cloud per line)</span>
-          </label>
-          <button id="createMeetingNotesButton" class="secondary-button" type="button" title="Sign up to generate AI meeting notes">Create meeting notes</button>
-          <label class="toggle">
-            <input id="autoFormatToggle" type="checkbox" checked>
-            <span>Auto-format</span>
-          </label>
-          <div class="search-box">
-            <span aria-hidden="true">⌕</span>
-            <input id="searchInput" type="search" placeholder="Search notes, decisions, owners...">
+          <div class="controls-toolbar">
+            <div class="controls-toolbar__primary">
+              <button id="startButton" class="primary-button" type="button">Start listening</button>
+              <button id="stopButton" class="icon-button" type="button" disabled aria-label="Stop listening" title="Stop listening">■</button>
+              <button id="newMeetingButton" class="secondary-button" type="button">New meeting</button>
+            </div>
+            <div class="search-box controls-toolbar__search">
+              <span aria-hidden="true">⌕</span>
+              <input id="searchInput" type="search" placeholder="Search notes…">
+            </div>
+          </div>
+
+          <div class="controls-setup">
+            <div class="controls-group">
+              <p class="controls-group__title">Language &amp; capture</p>
+              <div class="controls-fields controls-fields--two">
+                <label class="field">
+                  <span class="field__label">Listen language</span>
+                  <select id="listenLanguageSelect">
+                    <option value="en-US" selected>English</option>
+                    <option value="mixed">Mixed — English, Hindi, Hinglish</option>
+                    <option value="hi-IN">Hindi</option>
+                    <option value="pa-IN">Punjabi</option>
+                    <option value="es-ES">Spanish</option>
+                    <option value="fr-FR">French</option>
+                    <option value="pt-BR">Portuguese</option>
+                    <option value="de-DE">German</option>
+                    <option value="ta-IN">Tamil</option>
+                    <option value="zh-CN">Chinese</option>
+                    <option value="ar-SA">Arabic</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span class="field__label">Capture source</span>
+                  <select id="captureSourceSelect">
+                    <option value="mic" selected>Close talk — in person</option>
+                    <option value="micRoom">Room listening — speakerphone / speakers</option>
+                    <option value="system">Meeting audio — this device</option>
+                    <option value="both">Mic + meeting audio — online here</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div class="controls-group controls-group--speaker">
+              <label class="field">
+                <span class="field__label">Default speaker</span>
+                <input id="speakerInput" type="text" list="speakerList" placeholder="Speaker 1">
+              </label>
+              <datalist id="speakerList"></datalist>
+            </div>
+
+            <div class="controls-group controls-group--modes">
+              <p class="controls-group__title">Transcription mode</p>
+              <div class="controls-toggles">
+                <label class="toggle toggle--chip" title="Detect different voices automatically">
+                  <input id="multiSpeakerToggle" type="checkbox">
+                  <span>Multi-speaker</span>
+                </label>
+                <label class="toggle toggle--chip" title="Pinned Hindi with higher accuracy on stop">
+                  <input id="hindiAccuracyToggle" type="checkbox">
+                  <span>High-accuracy Hindi</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <p id="controlsContextHint" class="controls-context-hint" aria-live="polite"></p>
+          <p id="captureSourceHint" class="is-hidden" aria-hidden="true"></p>
+          <p id="multiSpeakerHint" class="is-hidden" aria-hidden="true"></p>
+          <p id="hindiAccuracyHint" class="is-hidden" aria-hidden="true"></p>
+          <p id="listenLanguageHint" class="is-hidden" aria-hidden="true"></p>
+
+          <div class="controls-footer">
+            <div class="controls-footer__toggles">
+              <label class="toggle toggle--chip">
+                <input id="autoTranslateToEnglishToggle" type="checkbox">
+                <span>Translate Panel B live</span>
+              </label>
+              <label class="toggle toggle--chip">
+                <input id="autoFormatToggle" type="checkbox" checked>
+                <span>Auto-format</span>
+              </label>
+            </div>
+            <div class="controls-footer__actions">
+              <button id="createMeetingNotesButton" class="secondary-button" type="button" title="Sign up to generate AI meeting notes">Create meeting notes</button>
+              <button id="sampleButton" class="secondary-button" type="button">Sample meeting</button>
+            </div>
           </div>
         </section>
 
@@ -148,6 +188,11 @@
             <textarea id="manualTranscriptInput" rows="3" placeholder="Paste lines like Maya: Decision is final, or type plain notes and use the Speaker field above."></textarea>
           </div>
           <button id="addManualButton" class="secondary-button" type="button">Add to notes</button>
+          <div class="import-transcript-row">
+            <input id="importTranscriptInput" type="file" accept=".vtt,.txt,.text,.webvtt" hidden>
+            <button id="importTranscriptButton" class="secondary-button" type="button">Import Teams/Zoom transcript</button>
+            <p id="importTranscriptHint" class="helper-text">Upload a .vtt or .txt transcript exported from Teams or Zoom.</p>
+          </div>
         </section>
 
         <section id="meetingPage" class="main-grid page-section">
@@ -377,6 +422,11 @@
             </div>
             <div class="admin-toolbar">
               <input id="adminUserSearch" class="admin-search" type="search" placeholder="Search by name, UserID, or email" autocomplete="off">
+              <div class="admin-view-toggle" role="group" aria-label="User view">
+                <button type="button" class="admin-view-btn" data-admin-view="cards" title="Detailed cards">Cards</button>
+                <button type="button" class="admin-view-btn" data-admin-view="grid" title="Compact grid">Grid</button>
+                <button type="button" class="admin-view-btn" data-admin-view="list" title="Table list">List</button>
+              </div>
               <span id="adminUserCount" class="admin-count"></span>
             </div>
             <div id="adminUsersOutput" class="admin-users"></div>
@@ -433,6 +483,8 @@
     <script src="firebase-config.js"></script>
     <script src="firebase-config.local.js"></script>
     <script type="module" src="cloud.js"></script>
+    <script src="capture.js"></script>
+    <script src="transcript-import.js"></script>
     <script src="assemblyai-stream.js"></script>
     <script src="hindi-recorder.js"></script>
     <script src="app.js"></script>

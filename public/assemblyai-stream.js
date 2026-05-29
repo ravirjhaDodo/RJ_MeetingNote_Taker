@@ -1,5 +1,22 @@
 (function initAssemblyAiStream(global) {
   const SAMPLE_RATE = 16000;
+  // #region agent log
+  let dbgAudioFrames = 0;
+  function dbgAai(hypothesisId, location, message, data) {
+    fetch("http://127.0.0.1:7527/ingest/01a39fbc-e5ce-4de1-b62c-666baeafed00", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "81d54c" },
+      body: JSON.stringify({
+        sessionId: "81d54c",
+        hypothesisId,
+        location,
+        message,
+        data,
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+  }
+  // #endregion
 
   function floatTo16BitPCM(float32Array) {
     const buffer = new ArrayBuffer(float32Array.length * 2);
@@ -33,9 +50,30 @@
     return result;
   }
 
+  /** Boost quiet capture (room mic / system share) so AssemblyAI receives speech-level PCM. */
+  function normalizePcmLevel(buffer, targetPeak = 0.2, maxGain = 16) {
+    let peak = 0;
+    for (let i = 0; i < buffer.length; i += 1) {
+      peak = Math.max(peak, Math.abs(buffer[i]));
+    }
+    if (peak < 1e-7 || peak >= targetPeak) {
+      return { prePeak: peak, postPeak: peak, applied: false, gain: 1 };
+    }
+    const gain = Math.min(maxGain, targetPeak / peak);
+    for (let i = 0; i < buffer.length; i += 1) {
+      buffer[i] = Math.max(-1, Math.min(1, buffer[i] * gain));
+    }
+    let postPeak = 0;
+    for (let i = 0; i < buffer.length; i += 1) {
+      postPeak = Math.max(postPeak, Math.abs(buffer[i]));
+    }
+    return { prePeak: peak, postPeak, applied: true, gain };
+  }
+
   class AssemblyAiStream {
     constructor(options = {}) {
       this.getToken = options.getToken;
+      this.acquireStream = options.acquireStream || null;
       this.onTurn = options.onTurn || (() => {});
       this.onInterim = options.onInterim || (() => {});
       this.onError = options.onError || (() => {});
@@ -43,7 +81,11 @@
       this.speechModel = options.speechModel || "universal-streaming-english";
       this.maxSpeakers = options.maxSpeakers || 8;
       this.languageDetection = Boolean(options.languageDetection);
+      this.prompt = options.prompt || "";
       this.formatTurns = options.formatTurns !== false;
+      this.pcmTargetPeak = options.pcmTargetPeak ?? 0.2;
+      this.pcmMaxGain = options.pcmMaxGain ?? 16;
+      this.releaseStream = null;
       this.ws = null;
       this.audioContext = null;
       this.mediaStream = null;
@@ -54,6 +96,7 @@
       this.reconnectTimer = null;
       this.lastInterim = "";
       this.pendingAudio = [];
+      this.quietAudioStreak = 0;
     }
 
     async start() {
@@ -126,11 +169,19 @@
         sample_rate: String(SAMPLE_RATE),
         speaker_labels: "true",
         max_speakers: String(this.maxSpeakers),
-        format_turns: String(this.formatTurns),
         token: tokenData.token,
       });
       if (this.speechModel) params.set("speech_model", this.speechModel);
+      // u3-rt-pro always formats turns; sending format_turns is unnecessary (migration guide).
+      if (
+        this.formatTurns
+        && this.speechModel !== "whisper-rt"
+        && this.speechModel !== "u3-rt-pro"
+      ) {
+        params.set("format_turns", "true");
+      }
       if (this.languageDetection) params.set("language_detection", "true");
+      if (this.prompt) params.set("prompt", this.prompt);
 
       const endpoint = `wss://streaming.assemblyai.com/v3/ws?${params.toString()}`;
       this.ws = new WebSocket(endpoint);
@@ -176,9 +227,21 @@
       };
     }
 
+    turnTranscript(message) {
+      let transcript = String(message.transcript || message.utterance || message.text || "").trim();
+      const words = Array.isArray(message.words) ? message.words : [];
+      if (!transcript && words.length) {
+        transcript = words
+          .map((word) => String(word.text || "").trim())
+          .filter(Boolean)
+          .join(" ");
+      }
+      return transcript;
+    }
+
     extractSpeakerSegments(message) {
       const turnSpeaker = message.speaker_label || "UNKNOWN";
-      const transcript = String(message.transcript || message.text || "").trim();
+      const transcript = this.turnTranscript(message);
       const words = Array.isArray(message.words) ? message.words : [];
       const finalWords = words.filter((word) => word.word_is_final);
 
@@ -211,10 +274,39 @@
 
     handleMessage(message) {
       const type = message.type || message.message_type;
+      // #region agent log
+      if (!this._dbgWsCount) this._dbgWsCount = 0;
+      if (this._dbgWsCount < 50) {
+        this._dbgWsCount += 1;
+        dbgAai("G", "assemblyai-stream.js:handleMessage", "ws inbound", {
+          type: type || "(none)",
+          endOfTurn: message.end_of_turn,
+          hasTranscript: Boolean(message.transcript || message.utterance || message.text),
+          speechModel: this.speechModel,
+        });
+      }
+      // #endregion
+      if (type === "Error" || message.error) {
+        this.onError(new Error(String(message.error || message.message || "AssemblyAI streaming error.")));
+        return;
+      }
+      if (type === "Begin" || type === "SessionBegins") {
+        this.onStatus("connected");
+        return;
+      }
       if (type === "Turn") {
-        const transcript = String(message.transcript || message.text || "").trim();
+        const transcript = this.turnTranscript(message);
         const speakerLabel = message.speaker_label || "UNKNOWN";
         const isFinal = Boolean(message.end_of_turn);
+        // #region agent log
+        if (transcript || isFinal) {
+          dbgAai("C", "assemblyai-stream.js:Turn", "turn message", {
+            isFinal,
+            transcriptLen: transcript.length,
+            endOfTurn: isFinal,
+          });
+        }
+        // #endregion
         if (!transcript && !isFinal) return;
         if (isFinal) {
           this.lastInterim = "";
@@ -263,21 +355,54 @@
     }
 
     async startMic() {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-      });
+      if (this.acquireStream) {
+        const acquired = await this.acquireStream();
+        this.mediaStream = acquired.stream;
+        this.releaseStream = acquired.release || null;
+      } else {
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+        });
+        this.releaseStream = null;
+      }
 
       this.audioContext = new AudioContext();
+      if (this.audioContext.state === "suspended") {
+        await this.audioContext.resume();
+      }
       this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
       this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
       this.processor.onaudioprocess = (event) => {
         const input = event.inputBuffer.getChannelData(0);
         const downsampled = downsampleBuffer(input, this.audioContext.sampleRate, SAMPLE_RATE);
+        const gainInfo = normalizePcmLevel(downsampled, this.pcmTargetPeak, this.pcmMaxGain);
         const pcm = floatTo16BitPCM(downsampled);
+        // #region agent log
+        dbgAudioFrames += 1;
+        if (dbgAudioFrames % 120 === 0) {
+          const peakRounded = Number(gainInfo.postPeak.toFixed(4));
+          dbgAai("F", "assemblyai-stream.js:onaudioprocess", "audio peak sample", {
+            prePeak: Number(gainInfo.prePeak.toFixed(4)),
+            postPeak: peakRounded,
+            gainApplied: gainInfo.applied,
+            gain: gainInfo.applied ? Number(gainInfo.gain.toFixed(2)) : 1,
+            wsOpen: this.ws?.readyState === WebSocket.OPEN,
+            runId: "post-fix-v2",
+          });
+          if (gainInfo.postPeak < 0.012) {
+            this.quietAudioStreak += 1;
+            if (this.quietAudioStreak === 8) {
+              this.onStatus("quiet-audio");
+            }
+          } else {
+            this.quietAudioStreak = 0;
+          }
+        }
+        // #endregion
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(pcm);
         } else {
@@ -289,6 +414,13 @@
 
       this.sourceNode.connect(this.processor);
       this.processor.connect(this.audioContext.destination);
+      // #region agent log
+      dbgAai("D", "assemblyai-stream.js:startMic", "mic started", {
+        audioContextState: this.audioContext.state,
+        trackCount: this.mediaStream?.getAudioTracks?.().length ?? 0,
+        wsOpen: this.ws?.readyState === WebSocket.OPEN,
+      });
+      // #endregion
     }
 
     stopMic() {
@@ -302,7 +434,15 @@
         this.sourceNode.disconnect();
         this.sourceNode = null;
       }
-      if (this.mediaStream) {
+      if (this.releaseStream) {
+        try {
+          this.releaseStream();
+        } catch (error) {
+          console.warn("Capture release failed:", error);
+        }
+        this.releaseStream = null;
+        this.mediaStream = null;
+      } else if (this.mediaStream) {
         this.mediaStream.getTracks().forEach((track) => track.stop());
         this.mediaStream = null;
       }

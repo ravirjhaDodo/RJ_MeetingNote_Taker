@@ -33,7 +33,9 @@ index.html (landing) → signup | login → app.html (meeting)
 | `index.html` | Hero landing, account explainer, CTAs |
 | `app.html` | Meeting app (guest allowed for local features) |
 | `signup.html`, `login.html`, `forgot-password.html`, `forgot-userid.html` | Auth flows |
-| `app.js` | Speech, dual panels, AI notes modal, admin UI, exports, live Q&A |
+| `app.js` | Speech, dual panels, AI notes modal, admin UI, exports, live Q&A, capture source selector, transcript import |
+| `capture.js` | Pluggable capture: mic close-talk, mic room/passive, meeting audio (getDisplayMedia), both (mixed) |
+| `transcript-import.js` | Parse Teams/Zoom `.vtt` / `.txt` into speaker-labeled lines |
 | `hindi-recorder.js` | High-accuracy Hindi pre-recorded capture |
 | `assemblyai-stream.js` | Multi-speaker streaming (AssemblyAI) |
 | `cloud.js` | Auth state, backend router, feature helpers |
@@ -219,7 +221,9 @@ Do **not** copy `FIREBASE_SERVICE_ACCOUNT_JSON` into `functions/.env.local` (bre
 | Markdown (canonical) | `docs/help/*.md` |
 | Browser | `public/help/*.html` |
 
-Topics: getting started, account requirements, UserID signup, login/recovery, meeting basics, AI notes, cloud features, admin guide.
+Topics: getting started, account requirements, UserID signup, login/recovery, meeting basics (capture sources, import), AI notes, cloud features, admin guide.
+
+**Desktop capture (replace Zoom-style notes on same PC):** phased plan in `docs/desktop-capture-implementation-plan.md`; technical options in `docs/silent-capture-plan.md`. Browser-only cannot reliably capture Teams desktop audio on Windows (debug May 2026); Electron + WASAPI loopback is the intended fix (Option C-1).
 
 ## Update Rule
 

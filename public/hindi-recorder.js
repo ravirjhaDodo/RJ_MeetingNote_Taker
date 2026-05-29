@@ -35,10 +35,12 @@
       this.onChunk = options.onChunk || (() => {});
       this.onError = options.onError || (() => {});
       this.onStatus = options.onStatus || (() => {});
+      this.acquireStream = options.acquireStream || null;
       this.chunkIntervalMs = Number(options.chunkIntervalMs) || CHUNK_INTERVAL_MS;
       this.mimeType = pickMimeType();
       this.running = false;
       this.mediaStream = null;
+      this.releaseStream = null;
       this.fullRecorder = null;
       this.intervalRecorder = null;
       this.intervalTimer = null;
@@ -54,15 +56,22 @@
       this.fullChunks = [];
       this.onStatus("mic");
 
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: false,
-          autoGainControl: true,
-          sampleRate: { ideal: 48000 },
-        },
-      });
+      if (this.acquireStream) {
+        const acquired = await this.acquireStream();
+        this.mediaStream = acquired.stream;
+        this.releaseStream = acquired.release || null;
+      } else {
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: false,
+            autoGainControl: true,
+            sampleRate: { ideal: 48000 },
+          },
+        });
+        this.releaseStream = null;
+      }
 
       let recorderOptions;
       try {
@@ -164,7 +173,15 @@
           type: this.mimeType || this.fullRecorder?.mimeType || "audio/webm",
         });
         this.fullChunks = [];
-        if (this.mediaStream) {
+        if (this.releaseStream) {
+          try {
+            this.releaseStream();
+          } catch (error) {
+            console.warn("Capture release failed:", error);
+          }
+          this.releaseStream = null;
+          this.mediaStream = null;
+        } else if (this.mediaStream) {
           this.mediaStream.getTracks().forEach((track) => track.stop());
           this.mediaStream = null;
         }

@@ -39,7 +39,9 @@ public/
   login.html          UserID login
   forgot-password.html
   forgot-userid.html
-  app.js              Meeting logic, dual panels, AI notes UI, admin UI
+  app.js              Meeting logic, dual panels, AI notes UI, admin UI, capture source selector
+  capture.js          Pluggable audio capture (mic / room / meeting audio / both)
+  transcript-import.js  Teams/Zoom VTT/TXT import parser
   cloud.js            Firebase client + backend router (Vercel vs Functions)
   auth.js             Public auth API + password toggles
   styles.css          App styles
@@ -57,6 +59,8 @@ scripts/
   seed-platform-owner.js   One-time owner bootstrap (production SA)
 
 docs/help/            Canonical help markdown
+docs/silent-capture-plan.md  Option C technical summary (loopback / Electron)
+docs/desktop-capture-implementation-plan.md  Desktop capture phased plan (replace Zoom notes)
 firestore.rules       userIds server-only; users/{uid} client scoped
 firestore.indexes.json  users.contactEmail
 vercel.json           Static public/ + api/rj function

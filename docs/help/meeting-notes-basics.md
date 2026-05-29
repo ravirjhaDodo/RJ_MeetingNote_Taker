@@ -41,6 +41,33 @@ Enable **Multi-speaker (AssemblyAI)** to detect different voices automatically d
 
 The app can also infer names when someone says "I'm Ravi" or when another person is referenced in speech.
 
+## Capture source (secretary modes)
+
+Choose **Capture source** before **Start listening**:
+
+| Option | When to use |
+|--------|-------------|
+| **Microphone — close talk** | In-person notes or you speaking near the mic. Uses browser speech or Multi-speaker when enabled. |
+| **Microphone — room / passive listening** | A **separate laptop** listening in the room. Captures everyone audible, including online participants from the meeting computer's **speakers**. Echo cancellation is off. Requires Multi-speaker. Play the meeting on speakers, not headphones. |
+| **Meeting audio — this device** | Meeting on **this computer** (browser tab or **desktop app** such as Teams). Captures audio digitally via a one-time share prompt. For the **Teams desktop app on Windows**, choose **Entire screen → the monitor** showing Teams and **Share system audio** (Window share often has no audio). Requires Multi-speaker. |
+| **Both — mic + meeting audio** | Meeting on this computer plus your voice (e.g. USB speakerphone). Same share rules: **Entire screen** on the monitor where Teams plays, not Window. Requires Multi-speaker. |
+
+Future **silent desktop capture** (no share prompt) is planned; see `docs/silent-capture-plan.md`.
+
+## Import Teams/Zoom transcript
+
+Under **Fallback capture**, use **Import Teams/Zoom transcript** to upload a `.vtt` or `.txt` file exported from Teams or Zoom. Speaker names and lines are loaded into Panel A so you can search, translate, and generate AI meeting notes.
+
+Use import when live capture is incomplete (for example a meeting on another device) or when you want the platform's speaker labels.
+
+## Mixed listen language (English, Hindi, Hinglish)
+
+Choose **Mixed — English, Hindi, Hinglish** when speakers switch between English and Hindi in the same meeting (including Hinglish).
+
+- The app tags each line as **en**, **hi**, or **hinglish** (or **other?** if another script is detected).
+- This mode does **not** support Punjabi, Tamil, Spanish, Arabic, Chinese, or other languages — pick that language from the list instead.
+- For English-only meetings, choose **English** (not Mixed) for best accuracy.
+
 ## High-accuracy Hindi (pinned language)
 
 Use this when live capture drifts into Urdu/Persian script or wrong letters for Hindi speech.

@@ -3,6 +3,7 @@ const LISTEN_SETTINGS_STORAGE_KEY = "rjListenSettings";
 const LISTEN_LANGUAGE_STORAGE_KEY = "rjListenLanguage";
 const TRANSLATED_PANEL_STORAGE_KEY = "rjTranslatedPanelLanguage";
 const MULTI_SPEAKER_STORAGE_KEY = "rjMultiSpeakerMode";
+const CAPTURE_SOURCE_STORAGE_KEY = "rjCaptureSource";
 const HINDI_ACCURACY_STORAGE_KEY = "rjHindiAccuracyMode";
 const ACTIVE_ROLE_STORAGE_KEY = "rjActiveRole";
 const ROLE_LABELS = { admin: "Admin dashboard", user: "Meeting workspace" };
@@ -22,6 +23,7 @@ const state = {
   assemblyAiStream: null,
   isListening: false,
   multiSpeakerMode: false,
+  captureSource: "mic",
   hindiAccuracyMode: false,
   hindiRecorder: null,
   hindiAccuracySessionActive: false,
@@ -66,6 +68,9 @@ const els = {
   hindiAccuracyToggle: document.querySelector("#hindiAccuracyToggle"),
   hindiAccuracyHint: document.querySelector("#hindiAccuracyHint"),
   listenLanguageSelect: document.querySelector("#listenLanguageSelect"),
+  captureSourceSelect: document.querySelector("#captureSourceSelect"),
+  captureSourceHint: document.querySelector("#captureSourceHint"),
+  controlsContextHint: document.querySelector("#controlsContextHint"),
   autoTranslateToEnglishToggle: document.querySelector("#autoTranslateToEnglishToggle"),
   preferredLanguageSelect: document.querySelector("#preferredLanguageSelect"),
   panelBGenderControls: document.querySelector("#panelBGenderControls"),
@@ -91,6 +96,9 @@ const els = {
   retryMicButton: document.querySelector("#retryMicButton"),
   manualTranscriptInput: document.querySelector("#manualTranscriptInput"),
   addManualButton: document.querySelector("#addManualButton"),
+  importTranscriptInput: document.querySelector("#importTranscriptInput"),
+  importTranscriptButton: document.querySelector("#importTranscriptButton"),
+  importTranscriptHint: document.querySelector("#importTranscriptHint"),
   liveTranscript: document.querySelector("#liveTranscript"),
   notesOutput: document.querySelector("#notesOutput"),
   insightsOutput: document.querySelector("#insightsOutput"),
@@ -138,6 +146,7 @@ const els = {
   adminUsersOutput: document.querySelector("#adminUsersOutput"),
   adminUserSearch: document.querySelector("#adminUserSearch"),
   adminUserCount: document.querySelector("#adminUserCount"),
+  adminViewButtons: document.querySelectorAll("[data-admin-view]"),
   promptAfterMinutesInput: document.querySelector("#promptAfterMinutesInput"),
   stopAfterMinutesInput: document.querySelector("#stopAfterMinutesInput"),
   saveListenSettingsButton: document.querySelector("#saveListenSettingsButton"),
@@ -177,6 +186,7 @@ function setupRecognition() {
       const text = result[0].transcript.trim();
       if (text) recordSpeechActivity();
       if (result.isFinal) {
+        applyMixedRecognitionLanguage(text);
         void addTranscriptItem(text, currentSpeaker());
       } else {
         interim += `${text} `;
@@ -410,6 +420,34 @@ function requestStartListening() {
 
 function startListening() {
   if (!state.meetingStartedAt) state.meetingStartedAt = new Date();
+  state.captureNote = "";
+  // #region agent log
+  fetch("http://127.0.0.1:7527/ingest/01a39fbc-e5ce-4de1-b62c-666baeafed00", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "81d54c" },
+    body: JSON.stringify({
+      sessionId: "81d54c",
+      hypothesisId: "E",
+      location: "app.js:startListening",
+      message: "startListening",
+      data: {
+        captureSource: state.captureSource,
+        multiSpeaker: state.multiSpeakerMode,
+        useAssemblyAi: shouldUseAssemblyAi(),
+        listenLang: els.listenLanguageSelect?.value,
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+
+  if (captureRequiresStreamEngine() && !canUseMultiSpeakerMode()) {
+    setStatus("Capture source needs Multi-speaker", false);
+    els.liveTranscript.textContent = "Room listening and meeting-audio capture need Multi-speaker (AssemblyAI). Sign in, add an AssemblyAI key on Profile, or ask an admin to grant Speaker diarization.";
+    renderCaptureControls();
+    return;
+  }
+
   if (shouldUseHindiAccuracy()) {
     void startHindiAccuracyListening();
     return;
@@ -543,8 +581,57 @@ function analyzeTextScript(text) {
   };
 }
 
+/** Mixed listen mode: only English, Hindi, and Hinglish (not other languages). */
+function analyzeMixedLanguageFromText(text) {
+  const latin = countScriptChars(text, /[A-Za-z]/g);
+  const devanagari = countScriptChars(text, /[\u0900-\u097F]/g);
+  const other = countScriptChars(text, /[\u0A00-\u0A7F\u0600-\u06FF\u4E00-\u9FFF\u0B80-\u0BFF]/g);
+  const enHiTotal = latin + devanagari;
+
+  if (other > 0 && other >= Math.max(enHiTotal * 0.12, 3)) {
+    return {
+      bcp47: MIXED_DEFAULT_RECOGNITION_LANG,
+      iso: "other",
+      script: "other",
+      uncertain: true,
+      unsupported: true,
+    };
+  }
+
+  if (!enHiTotal) {
+    return { bcp47: MIXED_DEFAULT_RECOGNITION_LANG, iso: "en", script: "latin", uncertain: true };
+  }
+
+  const latinShare = latin / enHiTotal;
+  const devShare = devanagari / enHiTotal;
+  const minBlend = 0.18;
+
+  if (latin > 0 && devanagari > 0 && latinShare >= minBlend && devShare >= minBlend) {
+    return { bcp47: "en-US", iso: "hinglish", script: "hinglish", uncertain: false };
+  }
+
+  if (devanagari > latin) {
+    return { bcp47: "hi-IN", iso: "hi", script: "devanagari", uncertain: false };
+  }
+
+  return { bcp47: "en-US", iso: "en", script: "latin", uncertain: false };
+}
+
 function tagMixedLanguageFromText(text) {
-  return analyzeTextScript(text);
+  return analyzeMixedLanguageFromText(text);
+}
+
+function applyMixedRecognitionLanguage(text) {
+  if (!isMixedLanguageMode() || !text?.trim()) return;
+  const analysis = analyzeMixedLanguageFromText(text);
+  if (analysis.unsupported) return;
+  const nextLang = analysis.bcp47 || MIXED_DEFAULT_RECOGNITION_LANG;
+  if (nextLang === state.activeRecognitionLang) return;
+  state.activeRecognitionLang = nextLang;
+  if (state.recognition) {
+    state.recognition.lang = nextLang;
+    state.appliedRecognitionLang = nextLang;
+  }
 }
 
 function ensureRecognitionInstance() {
@@ -579,6 +666,20 @@ function resetRecognitionInstance() {
 
 async function addTranscriptItem(text, speakerHint = currentSpeaker(), options = {}) {
   if (!text) return;
+  // #region agent log
+  fetch("http://127.0.0.1:7527/ingest/01a39fbc-e5ce-4de1-b62c-666baeafed00", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "81d54c" },
+    body: JSON.stringify({
+      sessionId: "81d54c",
+      hypothesisId: "C",
+      location: "app.js:addTranscriptItem",
+      message: "transcript line",
+      data: { textLen: text.length, itemCount: state.transcriptItems.length + 1 },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   const parsed = parseSpeakerLine(text, speakerHint);
   const normalized = parsed.text.replace(/\s+/g, " ").trim();
   if (!normalized) return;
@@ -606,7 +707,9 @@ async function addTranscriptItem(text, speakerHint = currentSpeaker(), options =
   if (isMixedLanguageMode()) {
     const analysis = tagMixedLanguageFromText(normalized);
     captureLanguage = "mixed";
-    scriptTag = analysis.uncertain ? "mixed?" : analysis.iso;
+    if (analysis.unsupported) scriptTag = "other?";
+    else if (analysis.uncertain) scriptTag = "mixed?";
+    else scriptTag = analysis.iso;
   } else {
     captureLanguage = els.listenLanguageSelect.value;
   }
@@ -708,15 +811,15 @@ function applyRecognitionLanguage() {
 
 function listeningStatusLabel() {
   if (shouldUseHindiAccuracy()) {
-    return `Listening (pinned ${listenLanguageToAssemblyCode()})`;
+    return `Listening (pinned ${listenLanguageToAssemblyCode()}, ${captureSourceLabel()})`;
   }
   if (shouldUseAssemblyAi()) {
-    return "Listening — AssemblyAI multi-speaker";
+    return `Listening — AssemblyAI multi-speaker (${captureSourceLabel()})`;
   }
   const option = els.listenLanguageSelect?.selectedOptions?.[0];
   const label = option?.textContent?.trim() || recognitionLanguageTag();
   if (isMixedLanguageMode()) {
-    return `Listening (browser — mixed, English)`;
+    return "Listening (English / Hindi / Hinglish)";
   }
   return `Listening (browser — ${label})`;
 }
@@ -928,6 +1031,14 @@ function translationPendingLabel() {
 }
 
 function sourceLanguageForText(text) {
+  if (isMixedLanguageMode()) {
+    const fromText = analyzeMixedLanguageFromText(text);
+    if (fromText.unsupported) return "en";
+    if (!fromText.uncertain && fromText.iso) {
+      return fromText.iso === "hinglish" ? "hi" : fromText.iso;
+    }
+    return "en";
+  }
   const fromText = analyzeTextScript(text);
   if (!fromText.uncertain && fromText.iso) return fromText.iso;
   const selected = els.listenLanguageSelect.value;
@@ -1189,9 +1300,11 @@ async function renderLiveTranscript(interimText) {
 }
 
 function lastTranscriptPreview() {
+  if (state.liveOriginal?.trim()) return state.liveOriginal.trim();
+  if (state.liveText?.trim()) return state.liveText.trim();
   const last = state.transcriptItems.at(-1);
   if (!last) return "";
-  return last.text || "";
+  return last.originalText || last.text || "";
 }
 
 function noteSearchText(item) {
@@ -1217,6 +1330,7 @@ function render() {
   renderAiNotesButton();
   renderMultiSpeakerControls();
   renderHindiAccuracyControls();
+  renderCaptureControls();
 }
 
 function profileIsAdmin(profile) {
@@ -1331,13 +1445,32 @@ function createSpeakerPill(item) {
 function renderOriginalNotes() {
   const query = els.searchInput.value.trim();
   const items = state.transcriptItems.filter((item) => matchesQuery(`${displaySpeaker(item)} ${item.originalText || item.text}`, query));
+  const liveDraft = state.isListening
+    ? String(state.liveOriginal || state.liveText || "").trim()
+    : "";
+  const showLiveDraft = liveDraft && matchesQuery(liveDraft, query);
+
   els.originalNotesOutput.innerHTML = "";
-  if (!items.length) {
+  if (!items.length && !showLiveDraft) {
     els.originalNotesOutput.appendChild(els.emptyNotesTemplate.content.cloneNode(true));
     return;
   }
   const list = document.createElement("ul");
   list.className = "note-list";
+  if (showLiveDraft) {
+    const li = document.createElement("li");
+    li.className = "note-list-live";
+    const meta = document.createElement("span");
+    meta.className = "note-meta";
+    meta.textContent = "Live";
+    li.appendChild(meta);
+    li.appendChild(createSpeakerPill({ speakerId: state.activeManualSpeakerId, speaker: currentSpeaker() }));
+    const draft = document.createElement("span");
+    draft.className = "note-live-draft";
+    draft.textContent = liveDraft;
+    li.appendChild(draft);
+    list.appendChild(li);
+  }
   items.forEach((item) => {
     const li = document.createElement("li");
     const meta = document.createElement("span");
@@ -1766,6 +1899,7 @@ async function refreshApiKeys() {
     const keys = await window.RJCloud.listUserApiKeys();
     await window.RJCloud.refreshAssemblyAiKeyStatus?.();
     renderMultiSpeakerControls();
+    renderCaptureControls();
     els.apiKeysOutput.innerHTML = keys.length
       ? keys.map((key) => `<p><strong>${escapeHtml(key.label || key.provider)}</strong> ${escapeHtml(key.provider)} key ending in ${escapeHtml(key.last4 || "****")} <button type="button" data-delete-key="${escapeHtml(key.id)}">Delete</button></p>`).join("")
       : "No saved API keys yet.";
@@ -1823,6 +1957,173 @@ function adminFeatureStatusText(feature) {
   return `${feature.status}${exp}`;
 }
 
+let adminUsersCache = [];
+let adminViewMode = "cards";
+try {
+  const saved = localStorage.getItem("rjAdminView");
+  if (saved === "cards" || saved === "grid" || saved === "list") adminViewMode = saved;
+} catch {
+  /* localStorage unavailable */
+}
+
+function adminUserMeta(user) {
+  const roles = (user.roles || [user.role]).filter(Boolean);
+  return {
+    roles,
+    roleText: roles.join(", ") || user.role || "user",
+    plan: user.plan || "free",
+    status: user.status || "unknown",
+    searchBlob: [user.displayName, user.userId, user.contactEmail, user.email]
+      .filter(Boolean).join(" ").toLowerCase(),
+  };
+}
+
+function formatPlanLabel(plan) {
+  const labels = { free: "Free", paid: "Paid", byok: "BYOK" };
+  const key = String(plan || "").toLowerCase();
+  return labels[key] || (key ? key.charAt(0).toUpperCase() + key.slice(1) : "—");
+}
+
+function adminPlanSelect(plan) {
+  return `
+    <select data-admin-plan aria-label="Plan">
+      <option value="free" ${plan === "free" ? "selected" : ""}>Free</option>
+      <option value="paid" ${plan === "paid" ? "selected" : ""}>Paid</option>
+      <option value="byok" ${plan === "byok" ? "selected" : ""}>BYOK</option>
+    </select>`;
+}
+
+function renderAdminUserGridItem(user) {
+  const { roles, roleText, plan, status, searchBlob } = adminUserMeta(user);
+  const label = escapeHtml(user.displayName || user.userId || user.uid);
+  return `
+    <article class="admin-tile" data-admin-user="${escapeHtml(user.uid)}" data-search="${escapeHtml(searchBlob)}">
+      <header class="admin-tile__head">
+        <span class="admin-card__avatar" aria-hidden="true">${escapeHtml(adminInitials(user))}</span>
+        <div class="admin-card__id">
+          <strong>${label}</strong>
+          <span class="admin-card__meta">@${escapeHtml(user.userId || "—")}</span>
+          <span class="admin-card__meta">${escapeHtml(user.contactEmail || user.email || "no email")}</span>
+        </div>
+      </header>
+      <div class="admin-card__badges">
+        ${adminBadge(status, adminStatusTone(status))}
+        ${adminBadge(roleText, roles.includes("admin") ? "info" : "muted")}
+        ${adminBadge(`Plan: ${formatPlanLabel(plan)}`, "neutral")}
+      </div>
+      <div class="admin-inline">
+        ${adminPlanSelect(plan)}
+        <button type="button" class="admin-btn admin-btn--primary" data-admin-action="setPlan">Set</button>
+      </div>
+      <div class="admin-btn-group">
+        <button type="button" class="admin-btn admin-btn--primary" data-admin-action="approve">Approve</button>
+        <button type="button" class="admin-btn" data-admin-action="pause">Pause</button>
+        <button type="button" class="admin-btn admin-btn--danger" data-admin-action="reject">Reject</button>
+        <button type="button" class="admin-btn admin-btn--danger" data-admin-action="revoke">Revoke</button>
+        <button type="button" class="admin-btn" data-admin-action="makeAdmin">Make admin</button>
+        <button type="button" class="admin-btn" data-admin-action="makeUser">Make user</button>
+        <button type="button" class="admin-btn" data-admin-action="guest">Guest 10d</button>
+        <button type="button" class="admin-btn" data-admin-action="stopGuest">Stop guest</button>
+        <button type="button" class="admin-btn" data-admin-temp="true">Temp pwd</button>
+        <button type="button" class="admin-btn admin-btn--danger" data-admin-action="deleteUser" data-user-label="${label}">Delete</button>
+      </div>
+    </article>`;
+}
+
+function renderAdminUserListRow(user) {
+  const { roles, roleText, plan, status, searchBlob } = adminUserMeta(user);
+  const label = escapeHtml(user.displayName || user.userId || user.uid);
+  return `
+    <tr class="admin-row" data-admin-user="${escapeHtml(user.uid)}" data-search="${escapeHtml(searchBlob)}">
+      <td class="admin-row__user">
+        <span class="admin-card__avatar admin-card__avatar--sm" aria-hidden="true">${escapeHtml(adminInitials(user))}</span>
+        <div class="admin-card__id">
+          <strong>${label}</strong>
+          <span class="admin-card__meta">@${escapeHtml(user.userId || "—")}</span>
+        </div>
+      </td>
+      <td class="admin-row__edit">
+        <div class="admin-row__edit-grid">
+          <input type="text" class="admin-input" data-edit-firstname value="${escapeHtml(user.firstName || "")}" placeholder="First" aria-label="First name">
+          <input type="text" class="admin-input" data-edit-lastname value="${escapeHtml(user.lastName || "")}" placeholder="Last" aria-label="Last name">
+          <input type="email" class="admin-input" data-edit-email value="${escapeHtml(user.contactEmail || "")}" placeholder="Contact email" aria-label="Contact email">
+          <button type="button" class="admin-btn admin-btn--primary" data-admin-action="updateDetails">Save</button>
+        </div>
+      </td>
+      <td>${adminBadge(status, adminStatusTone(status))}</td>
+      <td>${adminBadge(roleText, roles.includes("admin") ? "info" : "muted")}</td>
+      <td>
+        <div class="admin-inline">
+          ${adminPlanSelect(plan)}
+          <button type="button" class="admin-btn admin-btn--primary" data-admin-action="setPlan">Set</button>
+        </div>
+      </td>
+      <td class="admin-row__actions">
+        <div class="admin-btn-group">
+          <button type="button" class="admin-btn admin-btn--primary" data-admin-action="approve">Approve</button>
+          <button type="button" class="admin-btn" data-admin-action="pause">Pause</button>
+          <button type="button" class="admin-btn admin-btn--danger" data-admin-action="reject">Reject</button>
+          <button type="button" class="admin-btn admin-btn--danger" data-admin-action="revoke">Revoke</button>
+          <button type="button" class="admin-btn" data-admin-action="makeAdmin">Admin</button>
+          <button type="button" class="admin-btn" data-admin-action="makeUser">User</button>
+          <button type="button" class="admin-btn" data-admin-action="guest">Guest</button>
+          <button type="button" class="admin-btn" data-admin-action="stopGuest">Stop</button>
+          <button type="button" class="admin-btn" data-admin-temp="true">Temp pwd</button>
+          <button type="button" class="admin-btn admin-btn--danger" data-admin-action="deleteUser" data-user-label="${label}">Delete</button>
+        </div>
+      </td>
+    </tr>`;
+}
+
+function renderAdminUsersView() {
+  const out = els.adminUsersOutput;
+  out.classList.remove("admin-users--cards", "admin-users--grid", "admin-users--list");
+  out.classList.add(`admin-users--${adminViewMode}`);
+
+  if (!adminUsersCache.length) {
+    out.innerHTML = `<p class="admin-empty">No users yet.</p>`;
+    if (els.adminUserCount) els.adminUserCount.textContent = "0 users";
+    return;
+  }
+
+  if (adminViewMode === "list") {
+    out.innerHTML = `
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>User</th><th>Edit details</th><th>Status</th><th>Role</th><th>Plan</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>${adminUsersCache.map(renderAdminUserListRow).join("")}</tbody>
+        </table>
+      </div>`;
+  } else if (adminViewMode === "grid") {
+    out.innerHTML = adminUsersCache.map(renderAdminUserGridItem).join("");
+  } else {
+    out.innerHTML = adminUsersCache.map(renderAdminUserCard).join("");
+  }
+  applyAdminUserFilter();
+}
+
+function setAdminView(mode) {
+  if (!["cards", "grid", "list"].includes(mode)) return;
+  adminViewMode = mode;
+  try {
+    localStorage.setItem("rjAdminView", mode);
+  } catch {
+    /* localStorage unavailable */
+  }
+  els.adminViewButtons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.adminView === mode);
+  });
+  if (adminUsersCache.length) {
+    renderAdminUsersView();
+  } else {
+    refreshAdminUsers();
+  }
+}
+
 function renderAdminUserCard(user) {
   const roles = (user.roles || [user.role]).filter(Boolean);
   const roleText = roles.join(", ") || user.role || "user";
@@ -1865,7 +2166,7 @@ function renderAdminUserCard(user) {
         <div class="admin-card__badges">
           ${adminBadge(status, adminStatusTone(status))}
           ${adminBadge(roleText, roles.includes("admin") ? "info" : "muted")}
-          ${adminBadge(`plan: ${plan}`, "neutral")}
+          ${adminBadge(`Plan: ${formatPlanLabel(plan)}`, "neutral")}
         </div>
       </header>
 
@@ -1897,11 +2198,7 @@ function renderAdminUserCard(user) {
       <div class="admin-card__section">
         <span class="admin-card__label">Plan</span>
         <div class="admin-inline">
-          <select data-admin-plan aria-label="Plan">
-            <option value="free" ${plan === "free" ? "selected" : ""}>free</option>
-            <option value="paid" ${plan === "paid" ? "selected" : ""}>paid</option>
-            <option value="byok" ${plan === "byok" ? "selected" : ""}>byok</option>
-          </select>
+          ${adminPlanSelect(plan)}
           <button type="button" class="admin-btn admin-btn--primary" data-admin-action="setPlan">Set plan</button>
         </div>
       </div>
@@ -1922,36 +2219,30 @@ function renderAdminUserCard(user) {
 
 function applyAdminUserFilter() {
   const query = String(els.adminUserSearch?.value || "").trim().toLowerCase();
-  const cards = els.adminUsersOutput.querySelectorAll(".admin-card");
+  const items = els.adminUsersOutput.querySelectorAll("[data-admin-user]");
   let visible = 0;
-  cards.forEach((card) => {
-    const match = !query || (card.dataset.search || "").includes(query);
-    card.classList.toggle("is-hidden", !match);
+  items.forEach((item) => {
+    const match = !query || (item.dataset.search || "").includes(query);
+    item.classList.toggle("is-hidden", !match);
     if (match) visible += 1;
   });
   if (els.adminUserCount) {
     els.adminUserCount.textContent = query
-      ? `${visible} of ${cards.length} users`
-      : `${cards.length} user${cards.length === 1 ? "" : "s"}`;
+      ? `${visible} of ${items.length} users`
+      : `${items.length} user${items.length === 1 ? "" : "s"}`;
   }
 }
 
 async function refreshAdminUsers() {
   const scrollY = window.scrollY;
-  const restoreScroll = () => window.scrollTo({ top: scrollY });
   try {
     if (!els.adminUsersOutput.children.length) {
       els.adminUsersOutput.innerHTML = `<p class="admin-empty">Loading users…</p>`;
     }
     const users = await window.RJCloud.listUsers();
-    if (!users.length) {
-      els.adminUsersOutput.innerHTML = `<p class="admin-empty">No users yet.</p>`;
-      if (els.adminUserCount) els.adminUserCount.textContent = "0 users";
-      return;
-    }
-    els.adminUsersOutput.innerHTML = users.map(renderAdminUserCard).join("");
-    applyAdminUserFilter();
-    restoreScroll();
+    adminUsersCache = users || [];
+    renderAdminUsersView();
+    window.scrollTo({ top: scrollY });
   } catch (error) {
     els.adminUsersOutput.innerHTML = `<p class="admin-empty admin-empty--error">${escapeHtml(error.message || "Could not load users.")}</p>`;
   }
@@ -2204,6 +2495,189 @@ function canUseMultiSpeakerMode() {
   return Boolean(window.RJCloud.hasAssemblyAiAccess?.() || window.RJCloud.canUseFeature?.("speakerDiarization"));
 }
 
+function captureRequiresStreamEngine() {
+  return state.captureSource !== "mic";
+}
+
+function buildAcquireStream() {
+  if (!window.RJCapture?.acquire) return null;
+  const source = state.captureSource;
+  if (source === "mic") return null;
+  return async () => {
+    const acquired = await window.RJCapture.acquire({ source });
+    state.captureNote = acquired.captureNote || "";
+    return { stream: acquired.stream, release: acquired.release };
+  };
+}
+
+function loadCaptureSource() {
+  const raw = localStorage.getItem(CAPTURE_SOURCE_STORAGE_KEY) || "mic";
+  state.captureSource = window.RJCapture?.normalizeSource?.(raw) || "mic";
+  if (els.captureSourceSelect) {
+    els.captureSourceSelect.value = state.captureSource;
+  }
+}
+
+function saveCaptureSource(source) {
+  state.captureSource = window.RJCapture?.normalizeSource?.(source) || "mic";
+  localStorage.setItem(CAPTURE_SOURCE_STORAGE_KEY, state.captureSource);
+  if (els.captureSourceSelect && els.captureSourceSelect.value !== state.captureSource) {
+    els.captureSourceSelect.value = state.captureSource;
+  }
+}
+
+function captureSourceLabel(source = state.captureSource) {
+  switch (source) {
+    case "micRoom":
+      return "room microphone";
+    case "system":
+      return "meeting audio";
+    case "both":
+      return "mic + meeting audio";
+    default:
+      return "microphone";
+  }
+}
+
+function captureSourceShortHint(source = state.captureSource) {
+  switch (source) {
+    case "micRoom":
+      return "Speakerphone/USB headset (e.g. Jabra): meeting on same device, browser echo cancel off.";
+    case "system":
+      return "Teams desktop app: share Entire screen (monitor), not Window — plus Share system audio.";
+    case "both":
+      return "Jabra mic + Entire screen share (monitor where Teams plays).";
+    default:
+      return "Close talk only — not when meeting plays on the same headset (echo cancel removes it).";
+  }
+}
+
+function captureSourceDetailHint(source = state.captureSource) {
+  switch (source) {
+    case "micRoom":
+      return "Meeting plays on your Jabra speakers; the same mic hears the room. Turn speaker volume up. Do not run Zoom transcription on the same headset at the same time — Zoom gets digital audio; this app only hears the mic. After a Zoom meeting, use Import Teams/Zoom transcript under Fallback capture.";
+    case "system":
+      return "Tries digital screen audio once (Chrome will ask you to share — websites cannot turn on \"Share audio\" automatically). If that fails, falls back to your Jabra mic. For Teams desktop on Windows, Room listening is simpler (no share).";
+    case "both":
+      return "Jabra mic plus optional screen audio. Same share prompt; if screen audio is silent, your Jabra mic is used. Room listening avoids the share dialog entirely.";
+    default:
+      return "Close talk turns echo cancellation on. If Teams/video plays on the same Jabra, that cancellation removes remote voices — use Room listening or Meeting audio instead.";
+  }
+}
+
+function renderControlsContext() {
+  if (!els.controlsContextHint) return;
+
+  const messages = [];
+  const allowed = canUseMultiSpeakerMode();
+  const systemOk = window.RJCapture?.systemAudioSupported?.() ?? false;
+
+  if (state.isListening) {
+    messages.push("Stop listening before changing language, capture source, or transcription mode.");
+  } else if (els.listenLanguageSelect?.value === "mixed") {
+    messages.push("Mixed mode supports English, Hindi, and Hinglish only — not other languages.");
+  } else if (els.listenLanguageSelect?.value === "en-US") {
+    messages.push("English selected — good for English speech.");
+  }
+
+  if (state.captureSource !== "mic" && !allowed) {
+    messages.push("Sign in with Multi-speaker access to use room or meeting-audio capture.");
+  } else if ((state.captureSource === "system" || state.captureSource === "both") && !systemOk) {
+    messages.push("Meeting-audio capture needs Chrome or Edge.");
+  } else {
+    messages.push(captureSourceShortHint());
+  }
+
+  if (state.hindiAccuracyMode && listenLanguageSupportsAccuracyMode()) {
+    messages.push("High-accuracy Hindi: draft every ~40s, best quality when you stop.");
+  } else if (state.multiSpeakerMode && allowed) {
+    messages.push("Multi-speaker labels voices automatically — rename in Speakers below.");
+  } else if (!allowed && window.RJCloud?.user) {
+    messages.push("Add AssemblyAI on Profile for multi-speaker and advanced capture.");
+  }
+
+  els.controlsContextHint.textContent = messages.filter(Boolean).slice(0, 3).join(" ");
+}
+
+function renderCaptureControls() {
+  if (!els.captureSourceSelect) return;
+
+  const allowed = canUseMultiSpeakerMode();
+  const systemOk = window.RJCapture?.systemAudioSupported?.() ?? false;
+  const source = state.captureSource;
+
+  Array.from(els.captureSourceSelect.options).forEach((option) => {
+    const value = option.value;
+    let disabled = false;
+    if (value !== "mic" && !allowed) disabled = true;
+    if ((value === "system" || value === "both") && !systemOk) disabled = true;
+    option.disabled = disabled;
+  });
+
+  if (source !== "mic" && !allowed) {
+    saveCaptureSource("mic");
+  } else if ((source === "system" || source === "both") && !systemOk) {
+    saveCaptureSource("mic");
+  }
+
+  els.captureSourceSelect.value = state.captureSource;
+
+  const detailHint = captureSourceDetailHint();
+  if (source !== "mic" && !allowed) {
+    if (els.captureSourceHint) {
+      els.captureSourceHint.textContent = "Sign in and enable Multi-speaker (AssemblyAI) to use room or meeting-audio capture.";
+    }
+  } else if ((source === "system" || source === "both") && !systemOk) {
+    if (els.captureSourceHint) {
+      els.captureSourceHint.textContent = "Meeting-audio capture needs Chrome or Edge on this device.";
+    }
+  } else if (els.captureSourceHint) {
+    els.captureSourceHint.textContent = detailHint;
+  }
+
+  const captureField = els.captureSourceSelect.closest(".field");
+  if (captureField) captureField.title = detailHint;
+
+  renderControlsContext();
+}
+
+async function importTranscriptFile(file) {
+  if (!file) return;
+  const content = await file.text();
+  const parser = window.RJTranscriptImport?.parseTranscript;
+  if (!parser) {
+    setStatus("Import module not loaded", false);
+    return;
+  }
+
+  const items = parser(content, file.name);
+  if (!items.length) {
+    setStatus("No transcript lines found", false);
+    if (els.importTranscriptHint) {
+      els.importTranscriptHint.textContent = "Could not parse that file. Try a Teams/Zoom .vtt or .txt export.";
+    }
+    return;
+  }
+
+  if (!state.meetingStartedAt) state.meetingStartedAt = new Date();
+  for (const item of items) {
+    const speaker = item.speaker || defaultSpeaker();
+    const options = item.timestamp ? { source: "import", importedAt: item.timestamp } : { source: "import" };
+    await addTranscriptItem(item.text, speaker, options);
+    if (item.timestamp && state.transcriptItems.length) {
+      const last = state.transcriptItems[state.transcriptItems.length - 1];
+      if (last.source === "import") last.timestamp = item.timestamp;
+    }
+  }
+
+  setStatus(`Imported ${items.length} transcript line${items.length === 1 ? "" : "s"}`, false);
+  if (els.importTranscriptHint) {
+    els.importTranscriptHint.textContent = `Imported ${items.length} lines from ${file.name}.`;
+  }
+  render();
+  maybeOfferAiNotes();
+}
+
 function canUseHindiAccuracyMode() {
   return canUseMultiSpeakerMode() && listenLanguageSupportsAccuracyMode();
 }
@@ -2216,6 +2690,9 @@ function shouldUseHindiAccuracy() {
 
 function shouldUseAssemblyAi() {
   if (shouldUseHindiAccuracy()) return false;
+  if (captureRequiresStreamEngine() && canUseMultiSpeakerMode() && typeof window.RJAssemblyAiStream === "function") {
+    return true;
+  }
   return state.multiSpeakerMode && canUseMultiSpeakerMode() && typeof window.RJAssemblyAiStream === "function";
 }
 
@@ -2258,6 +2735,7 @@ function renderHindiAccuracyControls() {
     saveMultiSpeakerMode(false);
     els.multiSpeakerToggle.checked = false;
   }
+  renderControlsContext();
 }
 
 function removeTranscriptItemsBySource(source) {
@@ -2419,6 +2897,7 @@ async function startHindiAccuracyListening() {
 
   try {
     state.hindiRecorder = new window.RJHindiRecorder({
+      acquireStream: buildAcquireStream(),
       onChunk: (blob) => {
         recordSpeechActivity();
         enqueueHindiChunk(blob);
@@ -2460,14 +2939,15 @@ function renderMultiSpeakerControls() {
   if (!window.RJCloud?.user) {
     hintText = "Sign in to enable multi-speaker detection.";
   } else if (profile?.status === "pending" && !profileIsAdmin(profile)) {
-    hintText = "Your account is pending approval. Ask an admin to approve you, or sign out and back in if you are the platform owner.";
+    hintText = "Account pending approval — ask an admin or sign in again if you are the owner.";
   } else if (!allowed) {
-    hintText = "Add an AssemblyAI key on Profile (BYOK) or ask admin to grant Speaker diarization.";
+    hintText = "Add an AssemblyAI key on Profile or ask admin to grant Speaker diarization.";
   } else {
-    hintText = "On: AssemblyAI voice detection (Speaker A, B, …). For Hindi/Tamil/etc. it auto-detects language; English/Spanish/French/German/Portuguese use high-accuracy mode. Stop listening before turning off.";
+    hintText = "Labels voices as Speaker A, B, … Auto-detects language for Hindi/Tamil/etc.";
   }
   if (label) label.title = hintText;
   if (hint) hint.textContent = hintText;
+  renderControlsContext();
 }
 
 /** Languages natively supported by AssemblyAI Universal-3 Pro / Multilingual streaming. */
@@ -2475,15 +2955,32 @@ const ASSEMBLYAI_U3_LANGS = new Set(["en-US", "es-ES", "fr-FR", "pt-BR", "de-DE"
 
 function assemblyAiSpeechModel() {
   const listenLang = els.listenLanguageSelect.value;
+  if (listenLang === "mixed") return "whisper-rt";
   // u3-rt-pro and universal-streaming-multilingual only support EN/ES/DE/FR/PT/IT.
-  // Hindi, Punjabi, Tamil, Chinese, Arabic, and Mixed need Whisper streaming (99+ languages).
+  // Hindi, Punjabi, Tamil, Chinese, Arabic need Whisper streaming.
   if (ASSEMBLYAI_U3_LANGS.has(listenLang)) return "u3-rt-pro";
   return "whisper-rt";
 }
 
 function assemblyAiUsesLanguageDetection() {
+  if (isMixedLanguageMode()) return true;
   const model = assemblyAiSpeechModel();
   return model === "whisper-rt" || model === "universal-streaming-multilingual";
+}
+
+function assemblyAiPcmGainOptions() {
+  // Room / speakerphone pickup of playback on the same device is much quieter than close speech.
+  if (state.captureSource === "micRoom") {
+    return { pcmTargetPeak: 0.45, pcmMaxGain: 32 };
+  }
+  return { pcmTargetPeak: 0.2, pcmMaxGain: 16 };
+}
+
+function assemblyAiTranscriptionPrompt() {
+  // prompt is only supported on u3-rt-pro; sending it on whisper-rt can break the stream.
+  if (!isMixedLanguageMode()) return "";
+  if (assemblyAiSpeechModel() !== "u3-rt-pro") return "";
+  return "Transcribe multilingual conversation in English and Hindi. Preserve Hinglish code-switching.";
 }
 
 async function startAssemblyAiListening() {
@@ -2503,9 +3000,12 @@ async function startAssemblyAiListening() {
   try {
     state.assemblyAiStream = new window.RJAssemblyAiStream({
       getToken: () => window.RJCloud.getAssemblyAiStreamingToken(),
+      acquireStream: buildAcquireStream(),
       speechModel: assemblyAiSpeechModel(),
       languageDetection: assemblyAiUsesLanguageDetection(),
+      prompt: assemblyAiTranscriptionPrompt(),
       maxSpeakers: 8,
+      ...assemblyAiPcmGainOptions(),
       onTurn: ({ text, speakerLabel }) => {
         recordSpeechActivity();
         void addTranscriptItem(text, "", { assemblyLabel: speakerLabel });
@@ -2517,15 +3017,59 @@ async function startAssemblyAiListening() {
       },
       onError: (error) => {
         console.warn("AssemblyAI stream error:", error);
-        setStatus(error.message || "AssemblyAI streaming failed", false);
+        // #region agent log
+        fetch("http://127.0.0.1:7527/ingest/01a39fbc-e5ce-4de1-b62c-666baeafed00", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "81d54c" },
+          body: JSON.stringify({
+            sessionId: "81d54c",
+            hypothesisId: "A",
+            location: "app.js:onError",
+            message: "assemblyAI error",
+            data: { err: error?.message || String(error), isListening: state.isListening },
+            timestamp: Date.now(),
+            runId: "post-fix",
+          }),
+        }).catch(() => {});
+        // #endregion
+        state.isListening = false;
+        if (state.assemblyAiStream) {
+          void state.assemblyAiStream.stop();
+          state.assemblyAiStream = null;
+        }
+        stopInactivityMonitor();
+        const msg = error?.message || "AssemblyAI streaming failed";
+        setStatus(msg, false);
+        els.liveTranscript.textContent = msg;
+        render();
       },
       onStatus: (status) => {
+        if (status === "connected") setStatus("Listening — speak now (multi-speaker)", true);
         if (status === "reconnecting") setStatus("Reconnecting speaker detection…", true);
+        if (status === "quiet-audio") {
+          setStatus("Audio very quiet — check share target", false);
+          const roomHint = state.captureSource === "micRoom"
+            ? "On a Jabra/USB speakerphone: turn speaker volume up, use USB not Bluetooth, and avoid Close talk."
+            : "Teams desktop app: use Entire screen → the monitor showing Teams (Window share is silent on Windows). Or Room listening with Jabra volume up.";
+          els.liveTranscript.textContent = `Captured audio is nearly silent. ${roomHint}`;
+        }
       },
     });
 
     await state.assemblyAiStream.start();
-    setStatus("Listening with multi-speaker detection", true);
+    if (state.captureNote) {
+      setStatus("Listening via Jabra microphone", true);
+      els.liveTranscript.textContent = state.captureNote;
+    } else {
+      const captureKind = state.captureSource;
+      if (captureKind === "both") {
+        setStatus("Listening (mic + meeting audio)", true);
+      } else if (captureKind === "system") {
+        setStatus("Listening (meeting audio from shared screen)", true);
+      } else {
+        setStatus("Listening with multi-speaker detection", true);
+      }
+    }
     showMicHelp(false);
     render();
   } catch (error) {
@@ -3209,6 +3753,7 @@ els.listenLanguageSelect.addEventListener("change", () => {
     saveHindiAccuracyMode(false);
   }
   renderHindiAccuracyControls();
+  renderControlsContext();
   const wasListening = state.isListening;
   resetRecognitionInstance();
   if (wasListening && !shouldUseHindiAccuracy()) {
@@ -3430,6 +3975,10 @@ els.apiKeysOutput.addEventListener("click", async (event) => {
 });
 els.refreshUsersButton.addEventListener("click", refreshAdminUsers);
 els.adminUserSearch?.addEventListener("input", applyAdminUserFilter);
+els.adminViewButtons.forEach((button) => {
+  button.classList.toggle("is-active", button.dataset.adminView === adminViewMode);
+  button.addEventListener("click", () => setAdminView(button.dataset.adminView));
+});
 els.adminUsersOutput.addEventListener("click", async (event) => {
   const container = event.target.closest("[data-admin-user]");
   if (!container) return;
@@ -3519,6 +4068,7 @@ window.addEventListener("rj-cloud-auth", async () => {
   renderUserChrome();
   renderMultiSpeakerControls();
   renderHindiAccuracyControls();
+  renderCaptureControls();
   if (window.RJCloud?.user) {
     const profile = window.RJCloud.profile;
     if (profileIsAdmin(profile) || profile?.status === "active") {
@@ -3574,6 +4124,8 @@ loadListenLanguage();
 loadPreferredLanguage();
 loadMultiSpeakerMode();
 loadHindiAccuracyMode();
+loadCaptureSource();
+renderCaptureControls();
 
 els.speakerInput?.addEventListener("change", () => {
   state.activeManualSpeakerId = null;
@@ -3583,6 +4135,29 @@ els.speakerInput?.addEventListener("input", () => {
   if (!value || /^Speaker \d+$/i.test(value)) return;
   state.activeManualSpeakerId = resolveManualSpeaker(value);
 });
+
+if (els.captureSourceSelect) {
+  els.captureSourceSelect.addEventListener("change", () => {
+    if (state.isListening) {
+      setStatus("Stop listening before changing capture source", false);
+      els.captureSourceSelect.value = state.captureSource;
+      return;
+    }
+    saveCaptureSource(els.captureSourceSelect.value);
+    renderCaptureControls();
+  });
+}
+
+if (els.importTranscriptButton && els.importTranscriptInput) {
+  els.importTranscriptButton.addEventListener("click", () => {
+    els.importTranscriptInput.click();
+  });
+  els.importTranscriptInput.addEventListener("change", () => {
+    const file = els.importTranscriptInput.files?.[0];
+    els.importTranscriptInput.value = "";
+    if (file) void importTranscriptFile(file);
+  });
+}
 
 if (els.multiSpeakerToggle) {
   els.multiSpeakerToggle.addEventListener("change", () => {
@@ -3594,6 +4169,7 @@ if (els.multiSpeakerToggle) {
     saveMultiSpeakerMode(els.multiSpeakerToggle.checked);
     renderMultiSpeakerControls();
     renderHindiAccuracyControls();
+    renderCaptureControls();
   });
 }
 
@@ -3607,6 +4183,7 @@ if (els.hindiAccuracyToggle) {
     saveHindiAccuracyMode(els.hindiAccuracyToggle.checked);
     renderHindiAccuracyControls();
     renderMultiSpeakerControls();
+    renderCaptureControls();
   });
 }
 
