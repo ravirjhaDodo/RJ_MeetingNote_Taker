@@ -5,6 +5,7 @@ const TRANSLATED_PANEL_STORAGE_KEY = "rjTranslatedPanelLanguage";
 const MULTI_SPEAKER_STORAGE_KEY = "rjMultiSpeakerMode";
 const CAPTURE_SOURCE_STORAGE_KEY = "rjCaptureSource";
 const HINDI_ACCURACY_STORAGE_KEY = "rjHindiAccuracyMode";
+const EXPECTED_SPEAKERS_STORAGE_KEY = "rjExpectedSpeakers";
 const ACTIVE_ROLE_STORAGE_KEY = "rjActiveRole";
 const ROLE_LABELS = { admin: "Admin dashboard", user: "Meeting workspace" };
 const ROLE_HOME_PAGES = { admin: "adminPage", user: "meetingPage" };
@@ -24,6 +25,7 @@ const state = {
   isListening: false,
   multiSpeakerMode: false,
   captureSource: "mic",
+  expectedSpeakers: "4",
   hindiAccuracyMode: false,
   hindiRecorder: null,
   hindiAccuracySessionActive: false,
@@ -63,8 +65,10 @@ const els = {
   speakerList: document.querySelector("#speakerList"),
   speakersPanel: document.querySelector("#speakersPanel"),
   speakersOutput: document.querySelector("#speakersOutput"),
+  stabilizeSpeakersButton: document.querySelector("#stabilizeSpeakersButton"),
   speakerRenameHint: document.querySelector("#speakerRenameHint"),
   multiSpeakerToggle: document.querySelector("#multiSpeakerToggle"),
+  expectedSpeakersSelect: document.querySelector("#expectedSpeakersSelect"),
   hindiAccuracyToggle: document.querySelector("#hindiAccuracyToggle"),
   hindiAccuracyHint: document.querySelector("#hindiAccuracyHint"),
   listenLanguageSelect: document.querySelector("#listenLanguageSelect"),
@@ -421,25 +425,6 @@ function requestStartListening() {
 function startListening() {
   if (!state.meetingStartedAt) state.meetingStartedAt = new Date();
   state.captureNote = "";
-  // #region agent log
-  fetch("http://127.0.0.1:7527/ingest/01a39fbc-e5ce-4de1-b62c-666baeafed00", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "81d54c" },
-    body: JSON.stringify({
-      sessionId: "81d54c",
-      hypothesisId: "E",
-      location: "app.js:startListening",
-      message: "startListening",
-      data: {
-        captureSource: state.captureSource,
-        multiSpeaker: state.multiSpeakerMode,
-        useAssemblyAi: shouldUseAssemblyAi(),
-        listenLang: els.listenLanguageSelect?.value,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
 
   if (captureRequiresStreamEngine() && !canUseMultiSpeakerMode()) {
     setStatus("Capture source needs Multi-speaker", false);
@@ -526,6 +511,10 @@ function stopListening(statusMessage = "Paused", options = {}) {
     }
   }
   setStatus(statusMessage, false);
+  if (wasListening && state.multiSpeakerMode && els.listenLanguageSelect?.value === "en-US") {
+    const fixed = stabilizeSpeakerLabels({ silent: true });
+    if (fixed) showSpeakerRenameHint(`Cleaned ${fixed} short speaker-label ${fixed === 1 ? "flip" : "flips"}`);
+  }
   render();
   if (options.offerAiNotes !== false && wasListening && state.transcriptItems.length) {
     maybeOfferAiNotes();
@@ -666,20 +655,6 @@ function resetRecognitionInstance() {
 
 async function addTranscriptItem(text, speakerHint = currentSpeaker(), options = {}) {
   if (!text) return;
-  // #region agent log
-  fetch("http://127.0.0.1:7527/ingest/01a39fbc-e5ce-4de1-b62c-666baeafed00", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "81d54c" },
-    body: JSON.stringify({
-      sessionId: "81d54c",
-      hypothesisId: "C",
-      location: "app.js:addTranscriptItem",
-      message: "transcript line",
-      data: { textLen: text.length, itemCount: state.transcriptItems.length + 1 },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
   const parsed = parseSpeakerLine(text, speakerHint);
   const normalized = parsed.text.replace(/\s+/g, " ").trim();
   if (!normalized) return;
@@ -2404,6 +2379,81 @@ function renameSpeaker(speakerId, newName, { userLocked = true } = {}) {
   return true;
 }
 
+function transcriptWordCount(text) {
+  return String(text || "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+function transcriptChars(text) {
+  return String(text || "").replace(/\s+/g, " ").trim().length;
+}
+
+function transcriptTextForStabilization(item) {
+  return item?.originalText || item?.text || "";
+}
+
+function assignTranscriptSpeaker(item, speakerId) {
+  if (!item || !speakerId || !state.speakerRegistry[speakerId]) return false;
+  item.speakerId = speakerId;
+  item.speaker = state.speakerRegistry[speakerId].displayName;
+  return true;
+}
+
+function pruneUnusedAutoSpeakers() {
+  const used = new Set(state.transcriptItems.map((item) => item.speakerId).filter(Boolean));
+  Object.entries(state.speakerRegistry).forEach(([speakerId, entry]) => {
+    if (used.has(speakerId) || entry.userLocked) return;
+    delete state.speakerRegistry[speakerId];
+  });
+}
+
+function stabilizeSpeakerLabels({ silent = false } = {}) {
+  const items = state.transcriptItems.filter((item) => item.speakerId && !item.provisional);
+  if (items.length < 3) {
+    if (!silent) showSpeakerRenameHint("Need at least three speaker-labeled lines to clean labels");
+    return 0;
+  }
+
+  let fixed = 0;
+  let index = 1;
+  while (index < items.length - 1) {
+    const first = items[index];
+    const sourceId = first.speakerId;
+    const sourceEntry = state.speakerRegistry[sourceId];
+    if (!sourceId || sourceEntry?.userLocked) {
+      index += 1;
+      continue;
+    }
+
+    let end = index + 1;
+    while (end < items.length - 1 && items[end].speakerId === sourceId) end += 1;
+
+    const prev = items[index - 1];
+    const next = items[end];
+    const group = items.slice(index, end);
+    const groupText = group.map(transcriptTextForStabilization).join(" ");
+    const shortBlip = group.length <= 2
+      && transcriptWordCount(groupText) <= 10
+      && transcriptChars(groupText) <= 90;
+
+    if (prev?.speakerId && next?.speakerId && prev.speakerId === next.speakerId && prev.speakerId !== sourceId && shortBlip) {
+      group.forEach((item) => {
+        if (assignTranscriptSpeaker(item, prev.speakerId)) fixed += 1;
+      });
+    }
+
+    index = end;
+  }
+
+  pruneUnusedAutoSpeakers();
+  if (!silent) {
+    showSpeakerRenameHint(fixed
+      ? `Cleaned ${fixed} short speaker-label ${fixed === 1 ? "flip" : "flips"}`
+      : "No short speaker-label flips found");
+    render();
+  }
+  return fixed;
+}
+
 function promptRenameSpeaker(speakerId, currentName) {
   if (!speakerId) {
     const fallbackId = resolveManualSpeaker(currentName);
@@ -2430,6 +2480,13 @@ function showSpeakerRenameHint(message) {
 function renderSpeakersPanel() {
   if (!els.speakersOutput) return;
   const entries = Object.entries(state.speakerRegistry);
+  if (els.stabilizeSpeakersButton) {
+    const canClean = state.transcriptItems.filter((item) => item.speakerId && !item.provisional).length >= 3;
+    els.stabilizeSpeakersButton.disabled = !canClean;
+    els.stabilizeSpeakersButton.title = canClean
+      ? "Fix short speaker-label flips, especially after English room-listening capture"
+      : "Speaker cleanup appears after at least three labeled transcript lines";
+  }
   if (!entries.length) {
     els.speakersOutput.innerHTML = "<p class=\"helper-text\">Speakers appear here as people talk. Click a name to rename everyone with that label.</p>";
     return;
@@ -2542,7 +2599,7 @@ function captureSourceLabel(source = state.captureSource) {
 function captureSourceShortHint(source = state.captureSource) {
   switch (source) {
     case "micRoom":
-      return "Speakerphone/USB headset (e.g. Jabra): meeting on same device, browser echo cancel off.";
+      return "Best web setup: laptop mic input + Jabra/speaker output. Browser echo cancel is off.";
     case "system":
       return "Teams desktop app: share Entire screen (monitor), not Window — plus Share system audio.";
     case "both":
@@ -2555,7 +2612,7 @@ function captureSourceShortHint(source = state.captureSource) {
 function captureSourceDetailHint(source = state.captureSource) {
   switch (source) {
     case "micRoom":
-      return "Meeting plays on your Jabra speakers; the same mic hears the room. Turn speaker volume up. Do not run Zoom transcription on the same headset at the same time — Zoom gets digital audio; this app only hears the mic. After a Zoom meeting, use Import Teams/Zoom transcript under Fallback capture.";
+      return "Recommended web workaround for English Teams/Zoom desktop audio: set Windows/input device to the laptop microphone, keep meeting output on Jabra or speakers, turn volume up, and enable Multi-speaker. The laptop mic hears the speaker audio acoustically. Hindi/Hinglish room capture is experimental; speaker labels may mix during overlaps. Rename speakers after capture, or use import / pinned Hindi for better Hindi text.";
     case "system":
       return "Tries digital screen audio once (Chrome will ask you to share — websites cannot turn on \"Share audio\" automatically). If that fails, falls back to your Jabra mic. For Teams desktop on Windows, Room listening is simpler (no share).";
     case "both":
@@ -2565,17 +2622,37 @@ function captureSourceDetailHint(source = state.captureSource) {
   }
 }
 
+function listenLanguageCaptureHint() {
+  const listenLang = els.listenLanguageSelect?.value || "en-US";
+  if (state.captureSource === "micRoom") {
+    if (listenLang === "mixed") {
+      return "Mixed + Room listening is experimental: English may capture well, but Hindi can be missed from speaker playback. Try Hindi mode or import for Hindi-heavy meetings.";
+    }
+    if (listenLang === "hi-IN") {
+      return "Hindi + Room listening can catch Hindi/English, but acoustic Hindi accuracy and speaker labels may be rough. For accuracy, use High-accuracy Hindi or import.";
+    }
+    if (listenLang === "en-US") {
+      return "English + Room listening is the recommended web setup for same-PC Teams/Zoom playback.";
+    }
+  }
+  if (listenLang === "mixed") {
+    return "Mixed mode is best-effort for English/Hindi/Hinglish; for Hindi-heavy meetings, pin Hindi or use transcript import.";
+  }
+  return "";
+}
+
 function renderControlsContext() {
   if (!els.controlsContextHint) return;
 
   const messages = [];
   const allowed = canUseMultiSpeakerMode();
   const systemOk = window.RJCapture?.systemAudioSupported?.() ?? false;
+  const languageHint = listenLanguageCaptureHint();
 
   if (state.isListening) {
     messages.push("Stop listening before changing language, capture source, or transcription mode.");
-  } else if (els.listenLanguageSelect?.value === "mixed") {
-    messages.push("Mixed mode supports English, Hindi, and Hinglish only — not other languages.");
+  } else if (languageHint) {
+    messages.push(languageHint);
   } else if (els.listenLanguageSelect?.value === "en-US") {
     messages.push("English selected — good for English speech.");
   }
@@ -2591,7 +2668,7 @@ function renderControlsContext() {
   if (state.hindiAccuracyMode && listenLanguageSupportsAccuracyMode()) {
     messages.push("High-accuracy Hindi: draft every ~40s, best quality when you stop.");
   } else if (state.multiSpeakerMode && allowed) {
-    messages.push("Multi-speaker labels voices automatically — rename in Speakers below.");
+    messages.push(`Multi-speaker uses ${expectedSpeakersLabel()}; use Clean labels, then rename in Speakers below.`);
   } else if (!allowed && window.RJCloud?.user) {
     messages.push("Add AssemblyAI on Profile for multi-speaker and advanced capture.");
   }
@@ -2933,6 +3010,13 @@ function renderMultiSpeakerControls() {
   const profile = window.RJCloud?.profile;
   els.multiSpeakerToggle.disabled = !allowed;
   els.multiSpeakerToggle.checked = state.multiSpeakerMode && allowed;
+  if (els.expectedSpeakersSelect) {
+    els.expectedSpeakersSelect.disabled = !allowed || state.isListening || shouldUseHindiAccuracy();
+    els.expectedSpeakersSelect.value = state.expectedSpeakers;
+    els.expectedSpeakersSelect.title = state.isListening
+      ? "Stop listening before changing expected speakers"
+      : "Choose Auto when you do not know the speaker count; choose a fixed count when you do for steadier labels";
+  }
   const label = els.multiSpeakerToggle.closest("label");
   const hint = document.querySelector("#multiSpeakerHint");
   let hintText = "";
@@ -2943,7 +3027,7 @@ function renderMultiSpeakerControls() {
   } else if (!allowed) {
     hintText = "Add an AssemblyAI key on Profile or ask admin to grant Speaker diarization.";
   } else {
-    hintText = "Labels voices as Speaker A, B, … Auto-detects language for Hindi/Tamil/etc.";
+    hintText = "For English, fixed Expected speakers is steadiest; Auto lets AI identify speakers when the count is unknown.";
   }
   if (label) label.title = hintText;
   if (hint) hint.textContent = hintText;
@@ -2978,6 +3062,9 @@ function assemblyAiPcmGainOptions() {
 
 function assemblyAiTranscriptionPrompt() {
   // prompt is only supported on u3-rt-pro; sending it on whisper-rt can break the stream.
+  if (els.listenLanguageSelect?.value === "en-US" && assemblyAiSpeechModel() === "u3-rt-pro") {
+    return "Transcribe clear English meeting speech. Keep punctuation natural and preserve speaker turns.";
+  }
   if (!isMixedLanguageMode()) return "";
   if (assemblyAiSpeechModel() !== "u3-rt-pro") return "";
   return "Transcribe multilingual conversation in English and Hindi. Preserve Hinglish code-switching.";
@@ -3004,7 +3091,7 @@ async function startAssemblyAiListening() {
       speechModel: assemblyAiSpeechModel(),
       languageDetection: assemblyAiUsesLanguageDetection(),
       prompt: assemblyAiTranscriptionPrompt(),
-      maxSpeakers: 8,
+      maxSpeakers: assemblyAiMaxSpeakers(),
       ...assemblyAiPcmGainOptions(),
       onTurn: ({ text, speakerLabel }) => {
         recordSpeechActivity();
@@ -3017,21 +3104,6 @@ async function startAssemblyAiListening() {
       },
       onError: (error) => {
         console.warn("AssemblyAI stream error:", error);
-        // #region agent log
-        fetch("http://127.0.0.1:7527/ingest/01a39fbc-e5ce-4de1-b62c-666baeafed00", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "81d54c" },
-          body: JSON.stringify({
-            sessionId: "81d54c",
-            hypothesisId: "A",
-            location: "app.js:onError",
-            message: "assemblyAI error",
-            data: { err: error?.message || String(error), isListening: state.isListening },
-            timestamp: Date.now(),
-            runId: "post-fix",
-          }),
-        }).catch(() => {});
-        // #endregion
         state.isListening = false;
         if (state.assemblyAiStream) {
           void state.assemblyAiStream.stop();
@@ -3267,6 +3339,36 @@ function maybeInferSpeakerNamesViaCloud(item) {
 
 function loadMultiSpeakerMode() {
   state.multiSpeakerMode = localStorage.getItem(MULTI_SPEAKER_STORAGE_KEY) === "true";
+}
+
+function normalizeExpectedSpeakers(value) {
+  const raw = String(value || "4").trim();
+  if (raw === "auto") return "auto";
+  const numeric = Number.parseInt(raw, 10);
+  if ([2, 3, 4, 5, 6, 8].includes(numeric)) return String(numeric);
+  return "4";
+}
+
+function loadExpectedSpeakers() {
+  state.expectedSpeakers = normalizeExpectedSpeakers(localStorage.getItem(EXPECTED_SPEAKERS_STORAGE_KEY));
+  if (els.expectedSpeakersSelect) els.expectedSpeakersSelect.value = state.expectedSpeakers;
+}
+
+function saveExpectedSpeakers(value) {
+  state.expectedSpeakers = normalizeExpectedSpeakers(value);
+  localStorage.setItem(EXPECTED_SPEAKERS_STORAGE_KEY, state.expectedSpeakers);
+  if (els.expectedSpeakersSelect) els.expectedSpeakersSelect.value = state.expectedSpeakers;
+}
+
+function assemblyAiMaxSpeakers() {
+  if (state.expectedSpeakers === "auto") return 8;
+  return Number.parseInt(state.expectedSpeakers, 10) || 4;
+}
+
+function expectedSpeakersLabel() {
+  return state.expectedSpeakers === "auto"
+    ? "auto detect up to 8 speakers"
+    : `${state.expectedSpeakers} expected speakers`;
 }
 
 function saveMultiSpeakerMode(enabled) {
@@ -4123,6 +4225,7 @@ loadListeningSettings();
 loadListenLanguage();
 loadPreferredLanguage();
 loadMultiSpeakerMode();
+loadExpectedSpeakers();
 loadHindiAccuracyMode();
 loadCaptureSource();
 renderCaptureControls();
@@ -4173,6 +4276,19 @@ if (els.multiSpeakerToggle) {
   });
 }
 
+if (els.expectedSpeakersSelect) {
+  els.expectedSpeakersSelect.addEventListener("change", () => {
+    if (state.isListening) {
+      setStatus("Stop listening before changing expected speakers", false);
+      els.expectedSpeakersSelect.value = state.expectedSpeakers;
+      return;
+    }
+    saveExpectedSpeakers(els.expectedSpeakersSelect.value);
+    renderMultiSpeakerControls();
+    renderControlsContext();
+  });
+}
+
 if (els.hindiAccuracyToggle) {
   els.hindiAccuracyToggle.addEventListener("change", () => {
     if (state.isListening) {
@@ -4198,3 +4314,7 @@ if (els.speakersOutput) {
     renderPanelBGenderControls();
   });
 }
+
+els.stabilizeSpeakersButton?.addEventListener("click", () => {
+  stabilizeSpeakerLabels({ silent: false });
+});

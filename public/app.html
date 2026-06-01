@@ -106,6 +106,18 @@
                   <span>High-accuracy Hindi</span>
                 </label>
               </div>
+              <label class="field field--compact">
+                <span class="field__label">Expected speakers</span>
+                <select id="expectedSpeakersSelect">
+                  <option value="auto">Auto detect (up to 8)</option>
+                  <option value="2">2 speakers</option>
+                  <option value="3">3 speakers</option>
+                  <option value="4" selected>4 speakers</option>
+                  <option value="5">5 speakers</option>
+                  <option value="6">6 speakers</option>
+                  <option value="8">8 speakers</option>
+                </select>
+              </label>
             </div>
           </div>
 
@@ -139,7 +151,10 @@
               <p class="label">Speakers</p>
               <h2>Name and rename speakers</h2>
             </div>
-            <p id="speakerRenameHint" class="helper-text speaker-rename-hint"></p>
+            <div class="speakers-strip-actions">
+              <button id="stabilizeSpeakersButton" class="secondary-button" type="button" title="Fix short speaker-label flips in room-listening transcripts">Clean labels</button>
+              <p id="speakerRenameHint" class="helper-text speaker-rename-hint"></p>
+            </div>
           </div>
           <div id="speakersOutput" class="speakers-output"></div>
         </section>

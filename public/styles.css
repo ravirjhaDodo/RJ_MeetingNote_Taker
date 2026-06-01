@@ -330,6 +330,10 @@ h2 {
   min-width: 0;
 }
 
+.field--compact {
+  max-width: 180px;
+}
+
 .field__label {
   font-size: 0.75rem;
   font-weight: 800;
@@ -1259,6 +1263,14 @@ button:disabled {
 .speakers-strip-header h2 {
   margin: 4px 0 0;
   font-size: 1rem;
+}
+
+.speakers-strip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
 }
 
 .speakers-output {

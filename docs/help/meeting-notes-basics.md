@@ -39,6 +39,10 @@ Configure prompt and auto-stop minutes under listening settings. When auto-stop 
 
 Enable **Multi-speaker (AssemblyAI)** to detect different voices automatically during live meetings. Each voice gets a label such as Speaker 1 or Speaker 2.
 
+For English meetings, set **Expected speakers** close to the real number of active participants before starting. Use **Auto detect (up to 8)** when you genuinely do not know the count; AI will identify the speakers it hears up to that limit. A fixed count is usually steadier when you know the meeting size. This applies to all four capture sources: Close talk, Room listening, Meeting audio, and Both.
+
+After stopping, the app automatically cleans short speaker-label flips for English Multi-speaker sessions. You can also press **Clean labels** in the Speakers panel, then rename Speaker 1 / Speaker 2 to real names.
+
 The app can also infer names when someone says "I'm Ravi" or when another person is referenced in speech.
 
 ## Capture source (secretary modes)
@@ -48,11 +52,36 @@ Choose **Capture source** before **Start listening**:
 | Option | When to use |
 |--------|-------------|
 | **Microphone — close talk** | In-person notes or you speaking near the mic. Uses browser speech or Multi-speaker when enabled. |
-| **Microphone — room / passive listening** | A **separate laptop** listening in the room. Captures everyone audible, including online participants from the meeting computer's **speakers**. Echo cancellation is off. Requires Multi-speaker. Play the meeting on speakers, not headphones. |
+| **Microphone — room / passive listening** | Best web workaround for Teams/Zoom desktop or playback: set **input to the laptop microphone** and keep meeting **output on Jabra/speakers**. The laptop mic hears the room acoustically, echo cancellation is off, and Multi-speaker labels voices. Speaker labels may mix during overlaps; rename speakers after capture. |
 | **Meeting audio — this device** | Meeting on **this computer** (browser tab or **desktop app** such as Teams). Captures audio digitally via a one-time share prompt. For the **Teams desktop app on Windows**, choose **Entire screen → the monitor** showing Teams and **Share system audio** (Window share often has no audio). Requires Multi-speaker. |
 | **Both — mic + meeting audio** | Meeting on this computer plus your voice (e.g. USB speakerphone). Same share rules: **Entire screen** on the monitor where Teams plays, not Window. Requires Multi-speaker. |
 
 Future **silent desktop capture** (no share prompt) is planned; see `docs/silent-capture-plan.md`.
+
+### Recommended same-PC Teams/Zoom desktop setup
+
+Use this when a prerecorded Teams/Zoom meeting or live desktop meeting is playing on the same Windows PC:
+
+1. In Windows/Teams, set **speaker/output** to Jabra or external speakers.
+2. Set **microphone/input** to the laptop microphone, not the Jabra mic.
+3. In RJ Meeting Notes Taker, choose **Room listening — speakerphone / speakers**.
+4. Enable **Multi-speaker**.
+5. Turn speaker volume up enough for the laptop mic to hear clearly.
+6. After capture, use **Clean labels** in the **Speakers** panel, then rename speakers if diarization still mixed a few turns.
+
+This is an acoustic workaround, not true digital loopback. The planned desktop app will capture system audio directly for cleaner same-PC Teams/Zoom capture.
+
+### Language recommendations for room listening
+
+Based on local testing, use these settings:
+
+| Meeting language | Recommended setting | What to expect |
+|------------------|---------------------|----------------|
+| English | **Room listening** + **English** + **Multi-speaker** | Best current web setup for same-PC Teams/Zoom playback. Speaker labels are usable but may still need cleanup. |
+| English + Hindi / Hinglish | **Hindi** for live capture, or **Import Teams/Zoom transcript** after the meeting | Mixed live mode may capture English but miss Hindi from speaker playback. Hindi mode may catch both languages, but Hindi accuracy and speaker labels can be rough. |
+| Hindi-heavy | **High-accuracy Hindi (pinned language)**, or transcript import | Better Hindi text quality. This mode is single-speaker live capture, so use the Speakers panel or import for speaker cleanup. |
+
+No current browser-only mode gives perfect Hindi/Hinglish recognition plus perfect speaker diarization from room speaker playback. For important multilingual meetings, prefer platform transcript import or the future desktop loopback / recorded pass workflow.
 
 ## Import Teams/Zoom transcript
 
@@ -67,6 +96,7 @@ Choose **Mixed — English, Hindi, Hinglish** when speakers switch between Engli
 - The app tags each line as **en**, **hi**, or **hinglish** (or **other?** if another script is detected).
 - This mode does **not** support Punjabi, Tamil, Spanish, Arabic, Chinese, or other languages — pick that language from the list instead.
 - For English-only meetings, choose **English** (not Mixed) for best accuracy.
+- For room-listening playback, Mixed mode is experimental and may miss Hindi speech; use Hindi mode, High-accuracy Hindi, or import when Hindi accuracy matters.
 
 ## High-accuracy Hindi (pinned language)
 

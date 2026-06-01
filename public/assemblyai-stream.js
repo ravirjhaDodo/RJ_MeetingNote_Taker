@@ -1,22 +1,5 @@
 (function initAssemblyAiStream(global) {
   const SAMPLE_RATE = 16000;
-  // #region agent log
-  let dbgAudioFrames = 0;
-  function dbgAai(hypothesisId, location, message, data) {
-    fetch("http://127.0.0.1:7527/ingest/01a39fbc-e5ce-4de1-b62c-666baeafed00", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "81d54c" },
-      body: JSON.stringify({
-        sessionId: "81d54c",
-        hypothesisId,
-        location,
-        message,
-        data,
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-  }
-  // #endregion
 
   function floatTo16BitPCM(float32Array) {
     const buffer = new ArrayBuffer(float32Array.length * 2);
@@ -269,23 +252,47 @@
         currentWords.push(String(word.text || "").trim());
       }
       flush();
-      return segments.filter((segment) => segment.text);
+      return this.stabilizeSegments(segments.filter((segment) => segment.text));
+    }
+
+    segmentWordCount(segment) {
+      return String(segment?.text || "").trim().split(/\s+/).filter(Boolean).length;
+    }
+
+    stabilizeSegments(segments) {
+      if (!Array.isArray(segments) || segments.length < 3) return segments;
+      const stabilized = segments.map((segment) => ({ ...segment }));
+
+      for (let index = 1; index < stabilized.length - 1; index += 1) {
+        const previous = stabilized[index - 1];
+        const current = stabilized[index];
+        const next = stabilized[index + 1];
+        const shortFlip = this.segmentWordCount(current) <= 5 && String(current.text || "").length <= 48;
+        if (
+          previous.speakerLabel
+          && next.speakerLabel
+          && previous.speakerLabel === next.speakerLabel
+          && current.speakerLabel !== previous.speakerLabel
+          && shortFlip
+        ) {
+          current.speakerLabel = previous.speakerLabel;
+        }
+      }
+
+      const merged = [];
+      stabilized.forEach((segment) => {
+        const last = merged[merged.length - 1];
+        if (last && last.speakerLabel === segment.speakerLabel) {
+          last.text = `${last.text} ${segment.text}`.replace(/\s+/g, " ").trim();
+        } else {
+          merged.push(segment);
+        }
+      });
+      return merged;
     }
 
     handleMessage(message) {
       const type = message.type || message.message_type;
-      // #region agent log
-      if (!this._dbgWsCount) this._dbgWsCount = 0;
-      if (this._dbgWsCount < 50) {
-        this._dbgWsCount += 1;
-        dbgAai("G", "assemblyai-stream.js:handleMessage", "ws inbound", {
-          type: type || "(none)",
-          endOfTurn: message.end_of_turn,
-          hasTranscript: Boolean(message.transcript || message.utterance || message.text),
-          speechModel: this.speechModel,
-        });
-      }
-      // #endregion
       if (type === "Error" || message.error) {
         this.onError(new Error(String(message.error || message.message || "AssemblyAI streaming error.")));
         return;
@@ -298,15 +305,6 @@
         const transcript = this.turnTranscript(message);
         const speakerLabel = message.speaker_label || "UNKNOWN";
         const isFinal = Boolean(message.end_of_turn);
-        // #region agent log
-        if (transcript || isFinal) {
-          dbgAai("C", "assemblyai-stream.js:Turn", "turn message", {
-            isFinal,
-            transcriptLen: transcript.length,
-            endOfTurn: isFinal,
-          });
-        }
-        // #endregion
         if (!transcript && !isFinal) return;
         if (isFinal) {
           this.lastInterim = "";
@@ -381,28 +379,14 @@
         const downsampled = downsampleBuffer(input, this.audioContext.sampleRate, SAMPLE_RATE);
         const gainInfo = normalizePcmLevel(downsampled, this.pcmTargetPeak, this.pcmMaxGain);
         const pcm = floatTo16BitPCM(downsampled);
-        // #region agent log
-        dbgAudioFrames += 1;
-        if (dbgAudioFrames % 120 === 0) {
-          const peakRounded = Number(gainInfo.postPeak.toFixed(4));
-          dbgAai("F", "assemblyai-stream.js:onaudioprocess", "audio peak sample", {
-            prePeak: Number(gainInfo.prePeak.toFixed(4)),
-            postPeak: peakRounded,
-            gainApplied: gainInfo.applied,
-            gain: gainInfo.applied ? Number(gainInfo.gain.toFixed(2)) : 1,
-            wsOpen: this.ws?.readyState === WebSocket.OPEN,
-            runId: "post-fix-v2",
-          });
-          if (gainInfo.postPeak < 0.012) {
-            this.quietAudioStreak += 1;
-            if (this.quietAudioStreak === 8) {
-              this.onStatus("quiet-audio");
-            }
-          } else {
-            this.quietAudioStreak = 0;
+        if (gainInfo.postPeak < 0.012) {
+          this.quietAudioStreak += 1;
+          if (this.quietAudioStreak === 8) {
+            this.onStatus("quiet-audio");
           }
+        } else {
+          this.quietAudioStreak = 0;
         }
-        // #endregion
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(pcm);
         } else {
@@ -414,13 +398,6 @@
 
       this.sourceNode.connect(this.processor);
       this.processor.connect(this.audioContext.destination);
-      // #region agent log
-      dbgAai("D", "assemblyai-stream.js:startMic", "mic started", {
-        audioContextState: this.audioContext.state,
-        trackCount: this.mediaStream?.getAudioTracks?.().length ?? 0,
-        wsOpen: this.ws?.readyState === WebSocket.OPEN,
-      });
-      // #endregion
     }
 
     stopMic() {
@@ -455,3 +432,4 @@
 
   global.RJAssemblyAiStream = AssemblyAiStream;
 })(window);
+

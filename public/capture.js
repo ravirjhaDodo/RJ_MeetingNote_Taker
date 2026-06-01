@@ -1,20 +1,4 @@
 (function initRjCapture(global) {
-  // #region agent log
-  function dbgCapture(hypothesisId, location, message, data) {
-    fetch("http://127.0.0.1:7527/ingest/01a39fbc-e5ce-4de1-b62c-666baeafed00", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "81d54c" },
-      body: JSON.stringify({
-        sessionId: "81d54c",
-        hypothesisId,
-        location,
-        message,
-        data,
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-  }
-  // #endregion
 
   /**
    * RJCapture — pluggable audio capture for the meeting secretary app.
@@ -76,13 +60,6 @@
   async function acquireMic(source) {
     const stream = await navigator.mediaDevices.getUserMedia(micConstraints(source));
     const tracks = stream.getAudioTracks();
-    // #region agent log
-    dbgCapture("L", "capture.js:acquireMic", "mic device", {
-      source,
-      labels: tracks.map((t) => t.label),
-      echoCancellation: source !== "micRoom",
-    });
-    // #endregion
     return stream;
   }
 
@@ -162,35 +139,18 @@
       track.stop();
       displayStream.removeTrack(track);
     });
+    const shareKind = shareKindFromSurfaces(videoTracksBeforeStop.map((track) => track.displaySurface).filter(Boolean));
 
     const audioTracks = displayStream.getAudioTracks();
-    // #region agent log
-    const displaySurfaces = videoTracksBeforeStop.map((t) => t.displaySurface);
-    const shareKind = shareKindFromSurfaces(displaySurfaces);
-    dbgCapture("A", "capture.js:acquireSystem", "displayMedia result", {
-      videoTrackCount: videoTracksBeforeStop.length,
-      audioTrackCount: audioTracks.length,
-      audioLabels: audioTracks.map((t) => t.label).slice(0, 3),
-      displaySurfaces,
-      shareKind,
-    });
-    // #endregion
     if (!audioTracks.length) {
       stopStream(displayStream);
       return { stream: null, shareKind, probePeak: 0, missingAudioTrack: true };
     }
 
     const audioOnly = new MediaStream(audioTracks);
-    stopStream(displayStream);
+    audioTracks.forEach((track) => displayStream.removeTrack(track));
 
     const probePeak = await probeStreamPeak(audioOnly);
-    // #region agent log
-    dbgCapture("M", "capture.js:probeSystem", "system peak probe", {
-      probePeak: Number(probePeak.toFixed(5)),
-      shareKind,
-      missingAudioTrack: false,
-    });
-    // #endregion
 
     return { stream: audioOnly, shareKind, probePeak, missingAudioTrack: false };
   }
@@ -241,14 +201,6 @@
       levelTimer = setInterval(() => {
         const micPeak = micAnalyser ? Number(readAnalyserPeak(micAnalyser).toFixed(4)) : null;
         const systemPeak = systemAnalyser ? Number(readAnalyserPeak(systemAnalyser).toFixed(4)) : null;
-        // #region agent log
-        dbgCapture("K", "capture.js:mixLevels", "channel peaks", {
-          micPeak,
-          systemPeak,
-          systemGain,
-          micGain,
-        });
-        // #endregion
       }, 5000);
     }
 
@@ -273,9 +225,6 @@
 
   async function acquire({ source } = {}) {
     const kind = normalizeSource(source);
-    // #region agent log
-    dbgCapture("A", "capture.js:acquire", "acquire start", { source, kind });
-    // #endregion
     const ownedStreams = [];
     let releaseExtra = () => {};
 
@@ -298,12 +247,6 @@
           if (systemResult.stream) stopStream(systemResult.stream);
           const micStream = await acquireMic("micRoom");
           ownedStreams.push(micStream);
-          // #region agent log
-          dbgCapture("A", "capture.js:acquire", "system fallback micRoom", {
-            missingAudioTrack: systemResult.missingAudioTrack,
-            probePeak: systemResult.probePeak,
-          });
-          // #endregion
           return {
             stream: micStream,
             kind: "system-fallback-mic",
@@ -323,12 +266,6 @@
         const systemResult = await acquireSystem();
         if (systemNeedsMicFallback(systemResult)) {
           if (systemResult.stream) stopStream(systemResult.stream);
-          // #region agent log
-          dbgCapture("A", "capture.js:acquire", "both fallback micRoom only", {
-            missingAudioTrack: systemResult.missingAudioTrack,
-            probePeak: systemResult.probePeak,
-          });
-          // #endregion
           return {
             stream: micStream,
             kind: "both-fallback-mic",
@@ -344,12 +281,6 @@
 
       throw new Error(`Unknown capture source: ${source}`);
     } catch (error) {
-      // #region agent log
-      dbgCapture("A", "capture.js:acquire", "acquire failed", {
-        kind,
-        error: error?.message || String(error),
-      });
-      // #endregion
       release();
       throw error;
     }
@@ -362,3 +293,4 @@
     acquire,
   };
 })(window);
+

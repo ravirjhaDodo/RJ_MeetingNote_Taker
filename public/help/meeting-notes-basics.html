@@ -22,17 +22,37 @@
     <p>Choose <strong>Hindi</strong> as listen language, enable <strong>High-accuracy Hindi (pinned language)</strong>, then start listening. Draft segments appear every ~40s; press Stop for the best full pass. Name speakers in the Speakers panel for better name accuracy.</p>
     <h2>Multi-speaker mode</h2>
     <p>Enable <strong>Multi-speaker (AssemblyAI)</strong> to label different voices automatically. Rename speakers in the Speakers panel or by clicking a speaker pill — the new name applies everywhere in the meeting.</p>
+    <p>For English meetings, set <strong>Expected speakers</strong> close to the real participant count before starting. Use <strong>Auto detect (up to 8)</strong> when you do not know the count; AI will identify the speakers it hears up to that limit. After capture, use <strong>Clean labels</strong>, then rename Speaker 1 / Speaker 2 to real names.</p>
     <h2>Capture source</h2>
     <p>Choose <strong>Capture source</strong> before listening:</p>
     <ul>
       <li><strong>Microphone — close talk</strong> — in-person or you near the mic.</li>
-      <li><strong>Microphone — room / passive listening</strong> — separate laptop hearing the room (meeting must play on speakers).</li>
+      <li><strong>Microphone — room / passive listening</strong> — best web workaround for Teams/Zoom desktop: laptop mic input + Jabra/speaker output.</li>
       <li><strong>Meeting audio — this device</strong> — online meeting on this computer (one-time share prompt on your machine).</li>
       <li><strong>Both — mic + meeting audio</strong> — recommended for online meetings on this computer.</li>
     </ul>
     <p>Room and meeting-audio modes require Multi-speaker (AssemblyAI).</p>
+    <h2>Recommended same-PC Teams/Zoom desktop setup</h2>
+    <ol>
+      <li>Set speaker/output to Jabra or external speakers.</li>
+      <li>Set microphone/input to the laptop microphone, not the Jabra mic.</li>
+      <li>Choose <strong>Room listening — speakerphone / speakers</strong>.</li>
+      <li>Enable <strong>Multi-speaker</strong>.</li>
+      <li>Turn speaker volume up enough for the laptop mic to hear clearly.</li>
+      <li>After capture, use <strong>Clean labels</strong>, then rename speakers if diarization still mixed a few turns.</li>
+    </ol>
+    <p>This is an acoustic workaround. The planned desktop app will capture system audio directly for cleaner same-PC Teams/Zoom capture.</p>
+    <h2>Room listening languages</h2>
+    <ul>
+      <li><strong>English meetings:</strong> use Room listening + English + Multi-speaker. This is the best current web setup.</li>
+      <li><strong>English + Hindi / Hinglish:</strong> live room capture is experimental. Mixed mode can miss Hindi from speaker playback; Hindi mode may catch both languages but may need cleanup.</li>
+      <li><strong>Hindi-heavy meetings:</strong> use High-accuracy Hindi or import a Teams/Zoom transcript when accuracy matters.</li>
+    </ul>
+    <p>No browser-only room-listening mode gives perfect Hindi/Hinglish text and perfect speaker labels from speaker playback. Rename speakers after capture or import the meeting transcript for cleaner labels.</p>
     <h2>Import transcript</h2>
     <p>Upload a Teams or Zoom <strong>.vtt</strong> or <strong>.txt</strong> export under Fallback capture to load speaker-labeled lines into your notes.</p>
+    <h2>Mixed language</h2>
+    <p>Use <strong>Mixed — English, Hindi, Hinglish</strong> only as a best-effort live mode. For English-only meetings, choose English. For Hindi-heavy meetings, choose Hindi with High-accuracy Hindi or use transcript import.</p>
   </main>
 </body>
 </html>

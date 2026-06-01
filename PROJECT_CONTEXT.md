@@ -153,12 +153,21 @@ npm run set-password -- <userId> <password>
 
 - Remote: `https://github.com/ravirjhaDodo/RJ_MeetingNote_Taker`
 - Owner: `ravirjhaDodo`
+- Current working branch for local development and testing: `dev1`
 
 | Branch | Role |
 |--------|------|
 | **dev1** | Active development on this machine |
 | **main** | GitHub release line — sync from `dev1` when you choose to release |
 | **dev2** | Stable backup — sync **only when you explicitly ask** |
+
+Current release policy:
+
+1. Build and test locally on `dev1` first.
+2. Do not push, merge, or update `main` until Ravi is satisfied with local testing.
+3. Keep `dev2` one version behind as the backup/stable rollback branch.
+4. Prefer a Vercel preview/test deployment from `dev1` instead of using production as the only test environment.
+5. Treat local capture work as staged by milestones: clean browser capture/import first, then Electron desktop loopback spike.
 
 ```powershell
 # Normal work
@@ -224,6 +233,14 @@ Do **not** copy `FIREBASE_SERVICE_ACCOUNT_JSON` into `functions/.env.local` (bre
 Topics: getting started, account requirements, UserID signup, login/recovery, meeting basics (capture sources, import), AI notes, cloud features, admin guide.
 
 **Desktop capture (replace Zoom-style notes on same PC):** phased plan in `docs/desktop-capture-implementation-plan.md`; technical options in `docs/silent-capture-plan.md`. Browser-only cannot reliably capture Teams desktop audio on Windows (debug May 2026); Electron + WASAPI loopback is the intended fix (Option C-1).
+
+**Validated web workaround for Teams/Zoom desktop playback:** set input/mic to the laptop microphone and output/speaker to Jabra or external speakers, then use **Room listening** with **Multi-speaker**. This captures playback acoustically and can identify speakers, but diarization may mix speakers during overlaps. This is a practical web fallback, not a replacement for the planned desktop loopback app.
+
+**English speaker cleanup:** dev1 now has a **Clean labels** action in the Speakers panel and automatically runs the same cleanup after stopping an English Multi-speaker session. It repairs short speaker-label flips where one or two brief transcript lines are surrounded by the same speaker. This improves common diarization mistakes without replacing manual rename/merge review.
+
+**English speaker identification focus:** dev1 now exposes **Expected speakers** for Multi-speaker capture and sends that value to AssemblyAI for all four capture sources. Default is 4 speakers; **Auto detect (up to 8)** lets AI identify speakers when the count is unknown, while fixed counts are steadier when the participant count is known. English sessions also get a transcription prompt for natural English meeting turns. Clean-label stabilization now applies to all English Multi-speaker captures, not just Room listening, and streaming turns also smooth tiny in-turn speaker flips before Panel A receives them.
+
+**Multilingual room-listening test result:** English room listening captured well. Mixed mode captured English but missed Hindi in the same meeting. Hindi listen mode captured both Hindi and English, with Devanagari output for Hindi, but Hindi accuracy and speaker separation were weak. Product implication: recommend English room listening for English meetings; treat Hindi/English acoustic live capture as experimental; use Hindi high-accuracy mode, transcript import, or future desktop/recorded pass for better Hindi quality and speaker cleanup.
 
 ## Update Rule
 
