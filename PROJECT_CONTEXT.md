@@ -188,6 +188,34 @@ git checkout dev1
 
 **Do not commit:** `.env.local`, `functions/.env.local`, `public/firebase-config.local.js`, service account JSON, `.cursor/`.
 
+### Two-computer / OneDrive workflow
+
+The project folder lives inside OneDrive (`C:\Users\ravir\OneDrive\AI Projects\RJ_MeetingNote_Taker`) and is opened from more than one computer. **GitHub is the source of truth and backup; OneDrive is convenience only.**
+
+Rules to avoid `.git` corruption:
+
+1. **Never work on both computers at the same time.**
+2. Set OneDrive to **"Always keep on this device"** so `.git` files are never cloud-only placeholders (Git cannot read dehydrated placeholders reliably).
+3. Before switching machines, **close the editor/terminal and wait for OneDrive to show "Up to date" (green check)**. Switching mid-sync can leave a partial `.git` state.
+4. Keep committing and pushing `dev1` to GitHub so a clean `git clone` is always available for recovery if OneDrive leaves a half-synced or conflicted `.git`.
+5. `node_modules/` and `functions/node_modules/` are gitignored but still physically present, so OneDrive syncs them (slow, many tiny files). Prefer excluding them from OneDrive sync and run `npm install` locally on each machine instead.
+
+Recommended per-session loop (whichever machine you use):
+
+```powershell
+git checkout dev1
+git pull origin dev1   # start: get latest
+# ... work and commit ...
+git push origin dev1   # end: publish before switching machines
+```
+
+Cleanest alternative (zero `.git` corruption risk): keep the repo **outside** OneDrive (e.g. `C:\Dev\RJ_MeetingNote_Taker`) and sync only through GitHub.
+
+> **Never run `robocopy /MIR` (or recursive deletes) against anything under `node_modules`.** A self-referential `file:..` dependency can create a junction pointing back to the repo root, and `/MIR` will follow it and wipe the whole project. `functions/package.json` must **not** depend on `rj-meeting-notes-taker` (`file:..`); the functions code uses `functions/lib/rj-shared.js`, not the root package.
+
+<!-- fs-loop-check: ok -->
+(Self-referential `file:..` dependency removed and recursive `node_modules` loop cleaned on 2026-06-01.)
+
 ## Vercel Deployment
 
 - **Live production URL:** https://rj-meeting-note-taker.vercel.app
