@@ -29,6 +29,7 @@ import {
   rolesForPrimaryRole,
   nowPlusDays,
   serializeProfile,
+  assertPasswordChangeNotRequired,
   validatePassword,
   validateUserId,
 } from "../functions/lib/rj-shared.js";
@@ -40,6 +41,11 @@ const ANSWER_MODEL = process.env.OPENAI_ANSWER_MODEL || "gpt-4.1-mini";
 const VECTOR_SIZE = Number(process.env.QDRANT_VECTOR_SIZE || 1536);
 const ADMIN_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "RJ Meeting Notes Taker <onboarding@resend.dev>";
 const ADMIN_REPLY_TO_EMAIL = process.env.ADMIN_EMAIL || PLATFORM_ADMIN_EMAIL;
+const FIRESTORE_BATCH_WRITE_LIMIT = 450;
+const EMBEDDING_BATCH_SIZE = 64;
+const DEFAULT_ALLOWED_ORIGINS = new Set([
+  "https://rj-meeting-note-taker.vercel.app",
+]);
 
 let cachedAdmin = null;
 let cachedOpenAI = null;
@@ -204,6 +210,7 @@ async function ensureProfileForToken(token) {
 async function requireUsableUser(req) {
   const token = await requireAuth(req);
   const profile = await ensureProfileForToken(token);
+  assertPasswordChangeNotRequired(profile);
   if (isProfileAdmin(profile)) return profile;
   if (profile.status !== "active") {
     throw new ApiError(403, `Account is ${profile.status || "not approved"}.`);
@@ -214,6 +221,7 @@ async function requireUsableUser(req) {
 async function requireAdmin(req) {
   const token = await requireAuth(req);
   const profile = await ensureProfileForToken(token);
+  assertPasswordChangeNotRequired(profile);
   if (!isProfileAdmin(profile)) throw new ApiError(403, "Admin access required.");
   return profile;
 }
@@ -280,6 +288,59 @@ async function ensureCollection() {
 async function embedText(text) {
   const response = await openai().embeddings.create({ model: EMBEDDING_MODEL, input: text });
   return response.data[0].embedding;
+}
+
+async function embedTexts(texts) {
+  if (!texts.length) return [];
+  const response = await openai().embeddings.create({ model: EMBEDDING_MODEL, input: texts });
+  return response.data
+    .sort((a, b) => a.index - b.index)
+    .map((item) => item.embedding);
+}
+
+async function buildSegmentPoints({ uid, meetingId, segments }) {
+  const points = [];
+  for (let start = 0; start < segments.length; start += EMBEDDING_BATCH_SIZE) {
+    const chunk = segments.slice(start, start + EMBEDDING_BATCH_SIZE);
+    const inputs = chunk.map((segment) => `${segment.speaker}: ${segment.originalText || segment.text}`);
+    const vectors = await embedTexts(inputs);
+    chunk.forEach((segment, index) => {
+      points.push({
+        id: segment.id,
+        vector: vectors[index],
+        payload: {
+          uid,
+          meetingId,
+          speaker: segment.speaker,
+          type: segment.type,
+          text: segment.originalText || segment.text,
+          panelText: segment.text,
+          timestamp: segment.timestamp,
+          order: segment.order,
+        },
+      });
+    });
+  }
+  return points;
+}
+
+async function commitMeetingSegments({ db, meetingRef, meetingDoc, segments }) {
+  let pending = db.batch();
+  let writes = 0;
+  pending.set(meetingRef, meetingDoc, { merge: true });
+  writes += 1;
+
+  for (const segment of segments) {
+    if (writes >= FIRESTORE_BATCH_WRITE_LIMIT) {
+      await pending.commit();
+      pending = db.batch();
+      writes = 0;
+    }
+    pending.set(meetingRef.collection("segments").doc(segment.id), segment);
+    writes += 1;
+  }
+
+  if (writes > 0) await pending.commit();
 }
 
 function normalizeSegments(segments) {
@@ -382,7 +443,6 @@ async function saveMeeting(req, data) {
   const meetingRef = data?.meetingId
     ? admin().db.collection("users").doc(profile.uid).collection("meetings").doc(data.meetingId)
     : admin().db.collection("users").doc(profile.uid).collection("meetings").doc();
-  const batch = admin().db.batch();
   const meetingDoc = {
     title: data?.title || "Untitled meeting",
     updatedAt: FieldValue.serverTimestamp(),
@@ -397,28 +457,14 @@ async function saveMeeting(req, data) {
       createdAt: new Date().toISOString(),
     };
   }
-  batch.set(meetingRef, meetingDoc, { merge: true });
 
-  const points = [];
-  for (const segment of segments) {
-    batch.set(meetingRef.collection("segments").doc(segment.id), segment);
-    points.push({
-      id: segment.id,
-      vector: await embedText(`${segment.speaker}: ${segment.originalText || segment.text}`),
-      payload: {
-        uid: profile.uid,
-        meetingId: meetingRef.id,
-        speaker: segment.speaker,
-        type: segment.type,
-        text: segment.originalText || segment.text,
-        panelText: segment.text,
-        timestamp: segment.timestamp,
-        order: segment.order,
-      },
-    });
-  }
-
-  await batch.commit();
+  await commitMeetingSegments({
+    db: admin().db,
+    meetingRef,
+    meetingDoc,
+    segments,
+  });
+  const points = await buildSegmentPoints({ uid: profile.uid, meetingId: meetingRef.id, segments });
   await qdrant().upsert(COLLECTION, { wait: true, points });
   return { meetingId: meetingRef.id, segmentCount: segments.length };
 }
@@ -543,6 +589,30 @@ async function updateUserProfile(req, data) {
   return { profile: serializeProfile({ ...profile, ...updates }) };
 }
 
+async function clearTemporaryPasswordState(req) {
+  const profile = await ensureProfileForToken(await requireAuth(req));
+  const issuedAt = profile.temporaryPasswordCreatedAt?.toDate?.()
+    || (profile.temporaryPasswordCreatedAt ? new Date(profile.temporaryPasswordCreatedAt) : null);
+  if (profile.requiresPasswordChange && !issuedAt) {
+    throw new ApiError(403, "Ask an admin to generate a new temporary password.");
+  }
+  if (profile.requiresPasswordChange) {
+    const user = await admin().auth.getUser(profile.uid);
+    const tokensValidAfter = user.tokensValidAfterTime ? new Date(user.tokensValidAfterTime) : null;
+    if (!tokensValidAfter || tokensValidAfter <= issuedAt) {
+      throw new ApiError(403, "Change your temporary password before continuing.");
+    }
+  }
+  const updates = {
+    requiresPasswordChange: false,
+    temporaryPasswordCreatedAt: null,
+    temporaryPasswordExpiresAt: null,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+  await profileRef(profile.uid).set(updates, { merge: true });
+  return { profile: serializeProfile({ ...profile, ...updates }) };
+}
+
 async function listUsers(req) {
   await requireAdmin(req);
   const snapshot = await admin().db.collection("users").orderBy("createdAt", "desc").limit(100).get();
@@ -657,6 +727,7 @@ async function adminGenerateTemporaryPassword(req, data) {
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
   await admin().auth.updateUser(data.uid, { password: tempPassword });
   await profileRef(data.uid).set({
+    temporaryPasswordCreatedAt: new Date(),
     temporaryPasswordExpiresAt: expiresAt,
     requiresPasswordChange: true,
     updatedAt: FieldValue.serverTimestamp(),
@@ -1081,7 +1152,7 @@ async function inferSpeakerNames(req, data) {
       suggestedName: String(item.suggestedName).trim(),
       confidence: Number(item.confidence) || 0,
     }))
-    .filter((item) => item.suggestedName && item.confidence >= 0.55)
+    .filter((item) => item.suggestedName && item.confidence >= 0.8)
     .filter((item) => !/introduction|self-introduction/i.test(item.suggestedName));
 
   return { suggestions };
@@ -1100,6 +1171,7 @@ const actions = {
   adminUpdateUser,
   askMeeting,
   checkUserIdAvailability,
+  clearTemporaryPasswordState,
   deleteUserApiKey,
   ensureUserProfile,
   generateMeetingNotes,
@@ -1121,9 +1193,14 @@ const actions = {
 
 function applyCors(req, res) {
   const origin = String(req.headers.origin || "");
+  const configuredOrigins = String(process.env.RJ_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const allowedOrigins = new Set([...DEFAULT_ALLOWED_ORIGINS, ...configuredOrigins]);
   const allowed =
     /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin) ||
-    /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin);
+    allowedOrigins.has(origin);
   if (allowed) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");

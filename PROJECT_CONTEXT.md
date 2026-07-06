@@ -40,6 +40,7 @@ index.html (landing) → signup | login → app.html (meeting)
 | `assemblyai-stream.js` | Multi-speaker streaming (AssemblyAI) |
 | `cloud.js` | Auth state, backend router, feature helpers |
 | `auth.js` | Public registration/recovery API |
+| `manifest.webmanifest`, `sw.js`, `pwa.js`, `icon.svg` | PWA install shell and static asset cache |
 | `help/*.html` | Help center (mirrors `docs/help/*.md`) |
 
 ### Backend
@@ -87,7 +88,9 @@ Admins extend/pause/resume each feature with days/weeks/months/years via Admin U
 
 **Authenticated:** `ensureUserProfile`, `updateUserProfile`, `saveMeeting`, `listMeetings`, `getMeeting`, `askMeeting`, `translateTranscript`, `transcribeAudioChunk`, `getAssemblyAiStreamingToken`, `inferSpeakerNames`, `generateMeetingNotes`, `saveUserApiKey`, `listUserApiKeys`, `deleteUserApiKey`
 
-**Admin:** `listUsers`, `adminUpdateUser`, `adminGenerateTemporaryPassword`
+**Admin:** `listUsers`, `adminUpdateUser`, `adminGenerateTemporaryPassword`, `adminDeleteUser`
+
+**Account security:** `adminGenerateTemporaryPassword` marks `requiresPasswordChange`, `temporaryPasswordCreatedAt`, and a 24-hour `temporaryPasswordExpiresAt`. Users can sign in with the temporary password, but cloud/admin actions are blocked until they change it; expired temporary passwords require a new admin reset. `clearTemporaryPasswordState` is called after a successful password change and verifies Firebase Auth shows a later token-valid-after time before clearing the lock.
 
 ## Local URLs and ports
 
@@ -123,7 +126,7 @@ window.RJ_BACKEND_MODE = "vercel";
 window.RJ_API_BASE_URL = "https://rj-meeting-note-taker.vercel.app/api/rj";
 ```
 
-`/api/rj` returns scoped CORS headers for `localhost`/`127.0.0.1` and `*.vercel.app` origins, so a local static page can call the real production API. Other origins get no CORS header.
+`/api/rj` returns scoped CORS headers for `localhost`/`127.0.0.1` and the production URL by default. Additional preview/custom origins must be listed in `RJ_ALLOWED_ORIGINS` as a comma-separated allowlist. Other origins get no CORS header.
 
 **Firebase emulators (optional):**
 
@@ -240,6 +243,7 @@ See `.env.local.example`. Required for full cloud:
 - `API_KEY_ENCRYPTION_SECRET` (min 24 chars)
 - `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `ADMIN_EMAIL`
 - `FIREBASE_SERVICE_ACCOUNT_JSON` (single-line JSON for Vercel)
+- Optional `RJ_ALLOWED_ORIGINS` for additional `/api/rj` preview/custom origins
 
 Do **not** copy `FIREBASE_SERVICE_ACCOUNT_JSON` into `functions/.env.local` (breaks Functions emulator dotenv).
 
@@ -265,6 +269,10 @@ Topics: getting started, account requirements, UserID signup, login/recovery, me
 **Validated web workaround for Teams/Zoom desktop playback:** set input/mic to the laptop microphone and output/speaker to Jabra or external speakers, then use **Room listening** with **Multi-speaker**. This captures playback acoustically and can identify speakers, but diarization may mix speakers during overlaps. This is a practical web fallback, not a replacement for the planned desktop loopback app.
 
 **English speaker cleanup:** dev1 now has a **Clean labels** action in the Speakers panel and automatically runs the same cleanup after stopping an English Multi-speaker session. It repairs short speaker-label flips where one or two brief transcript lines are surrounded by the same speaker. This improves common diarization mistakes without replacing manual rename/merge review.
+
+**App shell / PWA (Jul 2026):** app workspace uses a desktop left navigation rail and mobile horizontal tab navigation to reduce top-level clutter. `app.html` links `manifest.webmanifest`, `icon.svg`, and `pwa.js`; `sw.js` caches static shell assets for install/offline startup while bypassing `/api/*` and Firebase config files so auth/backend behavior stays fresh.
+
+**Diarization session map (Jun 2026):** each time Multi-speaker listening starts, AssemblyAI labels (A/B/C…) map to **new** speaker rows for that session. Prior transcript lines keep their old labels. **Continue current meeting** shows a hint about fresh A/B/C mapping; changing **Expected speakers** while stopped is remembered and warned in that dialog. Cloud/local auto-rename only applies on a clear **self-intro** on that speaker’s lines (not when others say “Nick” / “Ravi”). One-speaker dominance hint appears when ~65% of recent lines share one voice.
 
 **English speaker identification focus:** dev1 now exposes **Expected speakers** for Multi-speaker capture and sends that value to AssemblyAI for all four capture sources. Default is 4 speakers; **Auto detect (up to 8)** lets AI identify speakers when the count is unknown, while fixed counts are steadier when the participant count is known. English sessions also get a transcription prompt for natural English meeting turns. Clean-label stabilization now applies to all English Multi-speaker captures, not just Room listening, and streaming turns also smooth tiny in-turn speaker flips before Panel A receives them.
 

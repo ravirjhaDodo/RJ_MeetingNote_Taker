@@ -1,0 +1,32 @@
+{
+  "name": "RJ Meeting Notes Taker",
+  "short_name": "RJ Notes",
+  "description": "Capture, structure, translate, search, and generate meeting notes.",
+  "start_url": "/app.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f6f2",
+  "theme_color": "#2d6a4f",
+  "orientation": "any",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Open meeting workspace",
+      "short_name": "Meeting",
+      "url": "/app.html#meetingPage"
+    },
+    {
+      "name": "Open profile",
+      "short_name": "Profile",
+      "url": "/app.html#profilePage"
+    }
+  ]
+}

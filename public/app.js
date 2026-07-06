@@ -51,6 +51,10 @@ const state = {
   lastCloudMeetingId: "",
   meetingStartedAt: null,
   activeRole: null,
+  /** Bumped each AssemblyAI listen start so A/B/C labels do not reuse prior session names. */
+  diarizationSessionId: 0,
+  expectedSpeakersAtLastStop: null,
+  speakerDominanceHintShown: false,
 };
 
 const els = {
@@ -150,6 +154,7 @@ const els = {
   adminUsersOutput: document.querySelector("#adminUsersOutput"),
   adminUserSearch: document.querySelector("#adminUserSearch"),
   adminUserCount: document.querySelector("#adminUserCount"),
+  adminActionStatus: document.querySelector("#adminActionStatus"),
   adminViewButtons: document.querySelectorAll("[data-admin-view]"),
   promptAfterMinutesInput: document.querySelector("#promptAfterMinutesInput"),
   stopAfterMinutesInput: document.querySelector("#stopAfterMinutesInput"),
@@ -160,6 +165,7 @@ const els = {
   continueListeningButton: document.querySelector("#continueListeningButton"),
   stopListeningNowButton: document.querySelector("#stopListeningNowButton"),
   startMeetingDialog: document.querySelector("#startMeetingDialog"),
+  startMeetingHint: document.querySelector("#startMeetingHint"),
   continueMeetingButton: document.querySelector("#continueMeetingButton"),
   startNewMeetingButton: document.querySelector("#startNewMeetingButton"),
   startMeetingCancelButton: document.querySelector("#startMeetingCancelButton"),
@@ -375,6 +381,27 @@ function continueListeningAfterPrompt() {
 }
 
 function showStartMeetingDialog() {
+  if (els.startMeetingHint) {
+    const hints = [];
+    if (shouldUseAssemblyAi() && state.transcriptItems.length) {
+      hints.push(
+        "Continue keeps your notes but starts a fresh speaker map (Speaker A/B/C). "
+        + "Rename speakers in the panel if labels drift after a pause.",
+      );
+    }
+    if (
+      state.expectedSpeakersAtLastStop
+      && state.expectedSpeakersAtLastStop !== state.expectedSpeakers
+    ) {
+      hints.push(
+        `Expected speakers changed (${state.expectedSpeakersAtLastStop} → ${state.expectedSpeakers}). `
+        + "For steadiest labels after a bad stretch, prefer Start new meeting.",
+      );
+    }
+    els.startMeetingHint.textContent = hints.length
+      ? hints.join(" ")
+      : "You already have notes in this workspace. Continue adding to them, or start a new meeting with a blank transcript.";
+  }
   els.startMeetingDialog.classList.remove("is-hidden");
 }
 
@@ -398,6 +425,9 @@ function beginNewMeeting() {
   state.speakerRegistry = {};
   state.speakerCounter = 0;
   state.activeManualSpeakerId = null;
+  state.diarizationSessionId = 0;
+  state.expectedSpeakersAtLastStop = null;
+  state.speakerDominanceHintShown = false;
   state.meetingStartedAt = null;
   state.lastCloudMeetingId = "";
   state.generatedNotesMarkdown = "";
@@ -511,6 +541,9 @@ function stopListening(statusMessage = "Paused", options = {}) {
     }
   }
   setStatus(statusMessage, false);
+  if (wasListening && shouldUseAssemblyAi()) {
+    state.expectedSpeakersAtLastStop = state.expectedSpeakers;
+  }
   if (wasListening && state.multiSpeakerMode && els.listenLanguageSelect?.value === "en-US") {
     const fixed = stabilizeSpeakerLabels({ silent: true });
     if (fixed) showSpeakerRenameHint(`Cleaned ${fixed} short speaker-label ${fixed === 1 ? "flip" : "flips"}`);
@@ -1314,6 +1347,16 @@ function profileIsAdmin(profile) {
   return profile.role === "admin";
 }
 
+function passwordChangeRequired(profile) {
+  return Boolean(profile?.requiresPasswordChange);
+}
+
+function temporaryPasswordExpired(profile) {
+  if (!passwordChangeRequired(profile) || !profile.temporaryPasswordExpiresAt) return false;
+  const expiresAt = new Date(profile.temporaryPasswordExpiresAt);
+  return Number.isFinite(expiresAt.getTime()) && expiresAt < new Date();
+}
+
 function profileRoles() {
   const profile = window.RJCloud?.profile;
   if (!profile) return [];
@@ -1403,6 +1446,9 @@ function renderPage(pageId = location.hash.replace("#", "") || "meetingPage") {
   }
   els.pageSections.forEach((section) => {
     section.classList.toggle("is-hidden", section.id !== target);
+  });
+  els.pageButtons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.page === target);
   });
 }
 
@@ -1614,7 +1660,8 @@ function renderCloudControls() {
   const user = cloud?.user;
   const profile = cloud?.profile;
   const signedIn = Boolean(user);
-  const usable = signedIn && (profileIsAdmin(profile) || profile?.status === "active");
+  const lockedByPassword = passwordChangeRequired(profile);
+  const usable = signedIn && !lockedByPassword && (profileIsAdmin(profile) || profile?.status === "active");
   const canCloudSave = usable && cloud?.canUseFeature?.("cloudEmbeddings");
   const canCloudQA = usable && cloud?.canUseFeature?.("cloudQA");
 
@@ -1631,6 +1678,10 @@ function renderCloudControls() {
     els.cloudStatus.innerHTML = 'Add public/firebase-config.js from the example to enable cloud features. <a href="help/do-i-need-an-account.html">Why sign in?</a>';
   } else if (!signedIn) {
     els.cloudStatus.innerHTML = 'Sign in to save meetings and use cloud Q&A. <a href="login.html">Log in</a> · <a href="help/do-i-need-an-account.html">Why sign in?</a>';
+  } else if (lockedByPassword) {
+    els.cloudStatus.textContent = temporaryPasswordExpired(profile)
+      ? "Temporary password expired. Ask an admin for a new temporary password."
+      : "Temporary password active. Open Profile and choose a new password before using cloud features.";
   } else if (!usable) {
     els.cloudStatus.textContent = `Signed in as ${profile?.userId || user.email}. Status: ${profile?.status || "pending admin approval"}.`;
   } else {
@@ -1723,6 +1774,9 @@ function renderUserChrome() {
     ? `${userId ? `@${userId}` : profile.contactEmail || ""} · ${viewLabel} · ${profile.status || "pending"}`
     : "Guest — local features only";
   els.userAvatar.src = profile?.photoURL || user?.photoURL || "";
+  if (profile && passwordChangeRequired(profile)) {
+    els.userMeta.textContent += " - change password";
+  }
   if (profile?.displayName && els.profileNameInput && !els.profileNameInput.value) {
     els.profileNameInput.value = profile.displayName;
   }
@@ -2302,7 +2356,15 @@ function defaultDisplayNameForLabel(assemblyLabel) {
 }
 
 function findSpeakerIdByAssemblyLabel(label) {
-  return Object.entries(state.speakerRegistry).find(([, entry]) => entry.assemblyLabel === label)?.[0] || null;
+  const sessionId = state.diarizationSessionId;
+  return Object.entries(state.speakerRegistry).find(([, entry]) => (
+    entry.assemblyLabel === label && entry.diarizationSessionId === sessionId
+  ))?.[0] || null;
+}
+
+function beginDiarizationSession() {
+  state.diarizationSessionId += 1;
+  state.speakerDominanceHintShown = false;
 }
 
 function findSpeakerIdByDisplayName(name) {
@@ -2321,6 +2383,7 @@ function getOrCreateSpeaker(assemblyLabel) {
   const displayName = defaultDisplayNameForLabel(label);
   state.speakerRegistry[speakerId] = {
     assemblyLabel: label,
+    diarizationSessionId: state.diarizationSessionId,
     displayName,
     inferredFrom: null,
     userLocked: false,
@@ -3077,6 +3140,7 @@ async function startAssemblyAiListening() {
   }
 
   hideContinuePrompt();
+  beginDiarizationSession();
   state.isListening = true;
   state.activeManualSpeakerId = null;
   startInactivityMonitor();
@@ -3095,7 +3159,9 @@ async function startAssemblyAiListening() {
       ...assemblyAiPcmGainOptions(),
       onTurn: ({ text, speakerLabel }) => {
         recordSpeechActivity();
-        void addTranscriptItem(text, "", { assemblyLabel: speakerLabel });
+        void addTranscriptItem(text, "", { assemblyLabel: speakerLabel }).then(() => {
+          maybeWarnSpeakerDominance();
+        });
       },
       onInterim: ({ text }) => {
         recordSpeechActivity();
@@ -3197,6 +3263,58 @@ function extractExplicitNameIntro(text) {
   return isLikelyPersonName(name) ? name : null;
 }
 
+function isGenericSpeakerDisplay(name) {
+  const value = String(name || "").trim();
+  return !value || value === "Unidentified voice" || /^Speaker \d+$/i.test(value);
+}
+
+function speakerLinesContainSelfIntro(speakerId, name, segments) {
+  const normalized = String(name || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return segments
+    .filter((segment) => segment.speakerId === speakerId)
+    .some((segment) => {
+      const intro = extractExplicitNameIntro(segment.text || segment.originalText || "");
+      return intro && intro.toLowerCase() === normalized;
+    });
+}
+
+function shouldApplyCloudSpeakerRename(suggestion, segments) {
+  const target = state.speakerRegistry[suggestion.speakerId];
+  if (!target || target.userLocked) return false;
+
+  const suggestedName = normalizeCandidateName(suggestion.suggestedName);
+  if (!isLikelyPersonName(suggestedName)) return false;
+
+  const minConfidence = isGenericSpeakerDisplay(target.displayName) ? 0.8 : 0.88;
+  if (Number(suggestion.confidence) < minConfidence) return false;
+
+  if (!speakerLinesContainSelfIntro(suggestion.speakerId, suggestedName, segments)) {
+    return false;
+  }
+
+  return true;
+}
+
+function maybeWarnSpeakerDominance() {
+  if (state.speakerDominanceHintShown || !state.multiSpeakerMode || !state.isListening) return;
+  const recent = state.transcriptItems.filter((item) => !item.provisional && item.speakerId);
+  if (recent.length < 15) return;
+
+  const slice = recent.slice(-30);
+  const counts = new Map();
+  slice.forEach((item) => {
+    counts.set(item.speakerId, (counts.get(item.speakerId) || 0) + 1);
+  });
+  const maxCount = Math.max(...counts.values());
+  if (maxCount / slice.length < 0.65) return;
+
+  state.speakerDominanceHintShown = true;
+  showSpeakerRenameHint(
+    "One voice has most recent lines — check Expected speakers matches the room, use Mic + Meeting audio, or Start new meeting if labels look wrong.",
+  );
+}
+
 function inferSpeakerGenderFromText(item) {
   const text = item.originalText || item.text || "";
   if (!text) return;
@@ -3259,6 +3377,9 @@ function inferSpeakerNamesFromText(item) {
 
   const explicitName = extractExplicitNameIntro(text);
   if (explicitName) {
+    if (diarizationSpeaker && !isGenericSpeakerDisplay(entry.displayName) && entry.displayName.toLowerCase() !== explicitName.toLowerCase()) {
+      return;
+    }
     const previous = entry.displayName;
     renameSpeaker(item.speakerId, explicitName, { userLocked: false });
     entry.inferredFrom = "self-intro";
@@ -3266,8 +3387,8 @@ function inferSpeakerNamesFromText(item) {
     return;
   }
 
-  // Only link third-person references when diarization created generic Speaker A/B labels.
-  if (!diarizationSpeaker) return;
+  // Only link third-person references for manual / generic Speaker N labels (never AssemblyAI A/B/C).
+  if (diarizationSpeaker) return;
 
   const actionMatch = text.match(ACTION_FOR_PATTERN);
   if (actionMatch) {
@@ -3322,14 +3443,14 @@ function maybeInferSpeakerNamesViaCloud(item) {
       }));
       const result = await window.RJCloud.inferSpeakerNames({ segments });
       (result.suggestions || []).forEach((suggestion) => {
+        if (!shouldApplyCloudSpeakerRename(suggestion, segments)) return;
         const target = state.speakerRegistry[suggestion.speakerId];
-        if (!target || target.userLocked || suggestion.confidence < 0.7) return;
+        if (!target) return;
         const suggestedName = normalizeCandidateName(suggestion.suggestedName);
-        if (!isLikelyPersonName(suggestedName)) return;
         const previous = target.displayName;
         renameSpeaker(suggestion.speakerId, suggestedName, { userLocked: false });
         target.inferredFrom = "cloud";
-        showSpeakerRenameHint(`Renamed ${previous} → ${suggestedName} (AI suggestion)`);
+        showSpeakerRenameHint(`Renamed ${previous} → ${suggestedName} (self-intro on that speaker)`);
       });
     } catch (error) {
       console.warn("Cloud speaker inference skipped:", error);
@@ -4049,9 +4170,9 @@ els.changePasswordButton.addEventListener("click", async () => {
     await window.RJCloud.changePassword(els.newPasswordInput.value);
     els.newPasswordInput.value = "";
     setStatus("Password changed", false);
+    render();
   } catch (error) {
-    setStatus("Password change failed", false);
-    setStatus("Password change failed", false);
+    setStatus(error.message || "Password change failed", false);
   }
 });
 els.saveApiKeyButton.addEventListener("click", async () => {
@@ -4090,6 +4211,7 @@ els.adminUsersOutput.addEventListener("click", async (event) => {
   const actionEl = event.target.closest("[data-admin-action], [data-admin-temp]");
   if (!actionEl) return;
   const uid = container.dataset.adminUser;
+  if (els.adminActionStatus) els.adminActionStatus.textContent = "Working...";
   try {
     if (event.target.dataset.adminTemp) {
       await window.RJCloud.adminGenerateTemporaryPassword(uid);
@@ -4127,8 +4249,13 @@ els.adminUsersOutput.addEventListener("click", async (event) => {
       });
     }
     await refreshAdminUsers();
+    if (els.adminActionStatus) els.adminActionStatus.textContent = "Admin action complete.";
   } catch (error) {
-    els.adminUsersOutput.textContent = error.message || "Admin action failed.";
+    if (els.adminActionStatus) {
+      els.adminActionStatus.textContent = error.message || "Admin action failed.";
+    } else {
+      setStatus(error.message || "Admin action failed.", false);
+    }
   }
 });
 els.pageButtons.forEach((button) => {

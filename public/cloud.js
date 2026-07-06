@@ -37,6 +37,7 @@ let listMeetingsCall = null;
 let getMeetingCall = null;
 let ensureUserProfileCall = null;
 let updateUserProfileCall = null;
+let clearTemporaryPasswordStateCall = null;
 let listUsersCall = null;
 let adminUpdateUserCall = null;
 let adminDeleteUserCall = null;
@@ -96,6 +97,7 @@ if (hasConfig) {
   getMeetingCall = httpsCallable(functions, "getMeeting");
   ensureUserProfileCall = httpsCallable(functions, "ensureUserProfile");
   updateUserProfileCall = httpsCallable(functions, "updateUserProfile");
+  clearTemporaryPasswordStateCall = httpsCallable(functions, "clearTemporaryPasswordState");
   listUsersCall = httpsCallable(functions, "listUsers");
   adminUpdateUserCall = httpsCallable(functions, "adminUpdateUser");
   adminDeleteUserCall = httpsCallable(functions, "adminDeleteUser");
@@ -185,6 +187,9 @@ async function magicLink(email) {
 async function changePassword(newPassword) {
   requireUser();
   await updatePassword(auth.currentUser, newPassword);
+  const response = await callBackend("clearTemporaryPasswordState", {}, clearTemporaryPasswordStateCall);
+  currentProfile = response.profile || currentProfile;
+  emitAuthChange();
 }
 
 async function logOut() {
@@ -381,9 +386,16 @@ function profileIsAdmin(profile) {
   return profile.role === "admin";
 }
 
+function profileRequiresPasswordChange(profile) {
+  if (!profile?.requiresPasswordChange) return false;
+  if (!profile.temporaryPasswordExpiresAt) return true;
+  return true;
+}
+
 function hasAssemblyAiAccess() {
   const profile = currentProfile;
   if (!profile) return false;
+  if (profileRequiresPasswordChange(profile)) return false;
   if (profileIsAdmin(profile)) return true;
   if (canUseFeature("speakerDiarization")) return true;
   if (hasAssemblyAiKeyCached) return true;
@@ -393,6 +405,7 @@ function hasAssemblyAiAccess() {
 function canUseFeature(featureKey) {
   const profile = currentProfile;
   if (!profile) return false;
+  if (profileRequiresPasswordChange(profile)) return false;
   if (profileIsAdmin(profile)) return true;
   if (profile.status !== "active") return false;
   const feature = profile.features?.[featureKey];
@@ -452,6 +465,7 @@ window.RJCloud = {
   refreshAssemblyAiKeyStatus,
   canUseFeature,
   canUsePanelTranslation,
+  profileRequiresPasswordChange,
   publicAction,
 };
 

@@ -2,6 +2,8 @@
 
 Live meeting notes in the browser: speech capture, structured decisions/actions/risks, multilingual transcripts, cloud save, semantic Q&A, and **AI-generated meeting notes** after each session.
 
+The meeting app is installable as a PWA from supported browsers on desktop and mobile. Open `/app.html`, then use the browser's install/add-to-home-screen action.
+
 ## Quick start (local — full stack)
 
 ```powershell

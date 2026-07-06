@@ -161,6 +161,7 @@ Or use **signup.html** for a new UserID (pending admin approval unless owner ema
 
 1. Import GitHub repo in Vercel.
 2. Add all `.env.local` variables to Vercel Environment Variables.
+   - Optional: set `RJ_ALLOWED_ORIGINS` to a comma-separated list of preview/custom origins that should call `/api/rj`.
 3. Set production `public/firebase-config.js` (or build inject):
    - `RJ_USE_FIREBASE_EMULATORS = false`
    - `RJ_BACKEND_MODE = "vercel"`

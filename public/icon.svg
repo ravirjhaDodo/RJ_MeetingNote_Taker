@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="RJ Meeting Notes Taker">
+  <rect width="512" height="512" rx="96" fill="#2d6a4f"/>
+  <path fill="#f4f6f2" d="M128 116h256c22 0 40 18 40 40v172c0 22-18 40-40 40H243l-82 55c-13 9-31-1-31-17v-38h-2c-22 0-40-18-40-40V156c0-22 18-40 40-40Z"/>
+  <path fill="#0f766e" d="M158 183h196v30H158v-30Zm0 67h196v30H158v-30Zm0 67h124v30H158v-30Z"/>
+  <circle cx="371" cy="332" r="36" fill="#f4c542"/>
+</svg>

@@ -44,6 +44,7 @@ public/
   transcript-import.js  Teams/Zoom VTT/TXT import parser
   cloud.js            Firebase client + backend router (Vercel vs Functions)
   auth.js             Public auth API + password toggles
+  manifest.webmanifest, sw.js, pwa.js, icon.svg  PWA install shell
   styles.css          App styles
   landing.css         Landing/auth styles
   help/*.html         User-facing help mirrors
@@ -117,6 +118,7 @@ All actions: `POST` body `{ "action": "<name>", "data": { ... } }`.
 | `requestUserIdReminder` | Public | `{ contactEmail }` → email all UserIDs |
 | `ensureUserProfile` | User | Merge token into Firestore profile |
 | `updateUserProfile` | User | displayName, photoURL, preferredLanguage, names |
+| `clearTemporaryPasswordState` | User | Clears admin temporary-password lock after Firebase Auth shows a later password/token-valid-after change |
 | `saveMeeting` | User + `cloudEmbeddings` | segments, title, optional meetingId, generatedNotes |
 | `listMeetings` | User | Saved meetings list |
 | `askMeeting` | User + `cloudQA` | question, optional meetingId |
@@ -128,6 +130,7 @@ All actions: `POST` body `{ "action": "<name>", "data": { ... } }`.
 | `listUsers` | Admin | All users with serialized profiles |
 | `adminUpdateUser` | Admin | See admin actions below |
 | `adminGenerateTemporaryPassword` | Admin | `{ uid }` |
+| `adminDeleteUser` | Admin | Deletes Auth user, profile, saved meetings, and UserID registry |
 
 ### `adminUpdateUser` actions
 
@@ -245,6 +248,7 @@ npm run vercel:dev
 
 1. Connect repo; root directory = project root (`public/` auto-served).
 2. Set all env vars from `.env.local.example` (especially `FIREBASE_SERVICE_ACCOUNT_JSON` as one line).
+   - Optional `RJ_ALLOWED_ORIGINS` is a comma-separated allowlist for additional preview/custom origins that may call `/api/rj`; localhost and production are allowed by default.
 3. Production `firebase-config.js`: `RJ_USE_FIREBASE_EMULATORS = false`, `RJ_BACKEND_MODE = "vercel"`.
 4. Firebase Console → Auth → Authorized domains → add `*.vercel.app`.
 5. `npx firebase deploy --only firestore` for rules/indexes.

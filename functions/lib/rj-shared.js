@@ -186,6 +186,9 @@ export function serializeProfile(profile) {
     guestApiExpiresAt: parseDate(profile.guestApiExpiresAt)?.toISOString?.() || profile.guestApiExpiresAt || null,
     trialEndsAt: parseDate(profile.trialEndsAt)?.toISOString?.() || profile.trialEndsAt || null,
     aiNotesTrialEndsAt: parseDate(profile.aiNotesTrialEndsAt)?.toISOString?.() || profile.aiNotesTrialEndsAt || null,
+    requiresPasswordChange: Boolean(profile.requiresPasswordChange),
+    temporaryPasswordCreatedAt: parseDate(profile.temporaryPasswordCreatedAt)?.toISOString?.() || profile.temporaryPasswordCreatedAt || null,
+    temporaryPasswordExpiresAt: parseDate(profile.temporaryPasswordExpiresAt)?.toISOString?.() || profile.temporaryPasswordExpiresAt || null,
     features: {
       aiMeetingNotes: serializeFeature(features.aiMeetingNotes),
       cloudQA: serializeFeature(features.cloudQA),
@@ -196,6 +199,29 @@ export function serializeProfile(profile) {
     lastLoginAt: parseDate(profile.lastLoginAt)?.toISOString?.() || null,
     createdAt: parseDate(profile.createdAt)?.toISOString?.() || null,
   };
+}
+
+export function temporaryPasswordState(profile) {
+  if (!profile?.requiresPasswordChange) {
+    return { required: false, expired: false, expiresAt: null };
+  }
+  const expiresAt = parseDate(profile.temporaryPasswordExpiresAt);
+  return {
+    required: true,
+    expired: Boolean(expiresAt && expiresAt < new Date()),
+    expiresAt,
+  };
+}
+
+export function assertPasswordChangeNotRequired(profile) {
+  const state = temporaryPasswordState(profile);
+  if (!state.required) return;
+  const error = new Error(state.expired
+    ? "Temporary password expired. Ask an admin to generate a new temporary password."
+    : "Change your temporary password before using cloud features.");
+  error.code = state.expired ? "failed-precondition" : "permission-denied";
+  error.status = state.expired ? 412 : 403;
+  throw error;
 }
 
 export function canUseFeature(profile, featureKey) {
@@ -326,11 +352,13 @@ export function buildSpeakerInferencePrompt(segments) {
 
 Rules:
 - Return JSON only: { "suggestions": [ { "speakerId": "...", "suggestedName": "...", "confidence": 0.0-1.0 } ] }
-- Use self-introductions ("I'm Ravi"), third-person references ("Action item for Maya"), and explicit name mentions.
+- ONLY suggest a name for a speakerId when that same speakerId's lines contain a clear self-introduction ("I'm Ravi", "my name is Maya", "call me Dan").
+- Do NOT assign a name to a speakerId just because other people mention that name (e.g. "Nick said…", "ask Ravi", "update Nick and me").
+- Do not use action items or third-person references to rename the current speaker cluster.
 - Only suggest names that appear clearly in the transcript.
 - Do not invent names.
 - Never use phrases like "self-introduction" as a name — only real person names (e.g. Ravi, Harjeet).
-- confidence >= 0.7 for clear self-intros; lower for indirect references.
+- confidence >= 0.85 only when the self-intro is on that speakerId's lines; omit uncertain suggestions.
 
 Segments:
 ${lines || "(empty)"}`;

@@ -3,7 +3,13 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#2d6a4f">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="RJ Notes">
     <title>Meeting app — RJ Meeting Notes Taker</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="icon.svg">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
@@ -444,6 +450,7 @@
               </div>
               <span id="adminUserCount" class="admin-count"></span>
             </div>
+            <p id="adminActionStatus" class="helper-text admin-action-status" aria-live="polite"></p>
             <div id="adminUsersOutput" class="admin-users"></div>
           </article>
         </section>
@@ -474,7 +481,7 @@
       <div class="listen-dialog-panel">
         <p class="label">Existing notes</p>
         <h2 id="startMeetingTitle">Continue or start fresh?</h2>
-        <p>You already have notes in this workspace. Continue adding to them, or start a new meeting with a blank transcript.</p>
+        <p id="startMeetingHint">You already have notes in this workspace. Continue adding to them, or start a new meeting with a blank transcript.</p>
         <div class="listen-dialog-actions">
           <button id="continueMeetingButton" class="primary-button" type="button">Continue current meeting</button>
           <button id="startNewMeetingButton" class="secondary-button" type="button">Start new meeting</button>
@@ -503,5 +510,6 @@
     <script src="assemblyai-stream.js"></script>
     <script src="hindi-recorder.js"></script>
     <script src="app.js"></script>
+    <script src="pwa.js"></script>
   </body>
 </html>

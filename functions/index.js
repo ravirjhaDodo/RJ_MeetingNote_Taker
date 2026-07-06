@@ -31,6 +31,7 @@ import {
   rolesForPrimaryRole,
   nowPlusDays,
   serializeProfile,
+  temporaryPasswordState,
   validatePassword,
   validateUserId,
 } from "./lib/rj-shared.js";
@@ -72,6 +73,8 @@ const VECTOR_SIZE = Number(process.env.QDRANT_VECTOR_SIZE || 1536);
 const NOTES_MODEL = process.env.OPENAI_NOTES_MODEL || process.env.OPENAI_ANSWER_MODEL || "gpt-4.1-mini";
 const ADMIN_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev";
 const ADMIN_REPLY_TO_EMAIL = process.env.ADMIN_EMAIL || PLATFORM_ADMIN_EMAIL;
+const FIRESTORE_BATCH_WRITE_LIMIT = 450;
+const EMBEDDING_BATCH_SIZE = 64;
 
 function requireAuth(request) {
   if (!request.auth?.uid) {
@@ -194,6 +197,7 @@ async function ensureProfileForRequest(request) {
 
 async function requireUsableUser(request) {
   const profile = await ensureProfileForRequest(request);
+  assertPasswordReadyForCallable(profile);
   if (isProfileAdmin(profile)) return profile;
   if (profile.status !== "active") {
     throw new HttpsError("permission-denied", `Account is ${profile.status || "not approved"}.`);
@@ -203,10 +207,22 @@ async function requireUsableUser(request) {
 
 async function requireAdmin(request) {
   const profile = await ensureProfileForRequest(request);
+  assertPasswordReadyForCallable(profile);
   if (!isProfileAdmin(profile)) {
     throw new HttpsError("permission-denied", "Admin access required.");
   }
   return profile;
+}
+
+function assertPasswordReadyForCallable(profile) {
+  const state = temporaryPasswordState(profile);
+  if (!state.required) return;
+  throw new HttpsError(
+    state.expired ? "failed-precondition" : "permission-denied",
+    state.expired
+      ? "Temporary password expired. Ask an admin to generate a new temporary password."
+      : "Change your temporary password before using cloud features.",
+  );
 }
 
 async function sendEmail({ to, subject, html }) {
@@ -285,6 +301,63 @@ async function embedText(text) {
     input: text,
   });
   return response.data[0].embedding;
+}
+
+async function embedTexts(texts) {
+  if (!texts.length) return [];
+  const response = await getOpenAI().embeddings.create({
+    model: EMBEDDING_MODEL,
+    input: texts,
+  });
+  return response.data
+    .sort((a, b) => a.index - b.index)
+    .map((item) => item.embedding);
+}
+
+async function buildSegmentPoints({ uid, meetingId, segments }) {
+  const points = [];
+  for (let start = 0; start < segments.length; start += EMBEDDING_BATCH_SIZE) {
+    const chunk = segments.slice(start, start + EMBEDDING_BATCH_SIZE);
+    const inputs = chunk.map((segment) => `${segment.speaker}: ${segment.originalText || segment.text}`);
+    const vectors = await embedTexts(inputs);
+    chunk.forEach((segment, index) => {
+      const searchText = segment.originalText || segment.text;
+      points.push({
+        id: segment.id,
+        vector: vectors[index],
+        payload: {
+          uid,
+          meetingId,
+          speaker: segment.speaker,
+          type: segment.type,
+          text: searchText,
+          panelText: segment.text,
+          timestamp: segment.timestamp,
+          order: segment.order,
+        },
+      });
+    });
+  }
+  return points;
+}
+
+async function commitMeetingSegments({ meetingRef, meetingDoc, segments }) {
+  let pending = db.batch();
+  let writes = 0;
+  pending.set(meetingRef, meetingDoc, { merge: true });
+  writes += 1;
+
+  for (const segment of segments) {
+    if (writes >= FIRESTORE_BATCH_WRITE_LIMIT) {
+      await pending.commit();
+      pending = db.batch();
+      writes = 0;
+    }
+    pending.set(meetingRef.collection("segments").doc(segment.id), segment);
+    writes += 1;
+  }
+
+  if (writes > 0) await pending.commit();
 }
 
 function normalizeSegments(segments) {
@@ -391,7 +464,6 @@ export const saveMeeting = onCall(async (request) => {
     ? db.collection("users").doc(uid).collection("meetings").doc(existingMeetingId)
     : db.collection("users").doc(uid).collection("meetings").doc();
   const meetingId = meetingRef.id;
-  const batch = db.batch();
 
   const meetingDoc = {
     title,
@@ -409,32 +481,9 @@ export const saveMeeting = onCall(async (request) => {
       createdAt: new Date().toISOString(),
     };
   }
-  batch.set(meetingRef, meetingDoc, { merge: true });
 
-  const points = [];
-  for (const segment of segments) {
-    const segmentRef = meetingRef.collection("segments").doc(segment.id);
-    batch.set(segmentRef, segment);
-
-    const searchText = segment.originalText || segment.text;
-    const vector = await embedText(`${segment.speaker}: ${searchText}`);
-    points.push({
-      id: segment.id,
-      vector,
-      payload: {
-        uid,
-        meetingId,
-        speaker: segment.speaker,
-        type: segment.type,
-        text: searchText,
-        panelText: segment.text,
-        timestamp: segment.timestamp,
-        order: segment.order,
-      },
-    });
-  }
-
-  await batch.commit();
+  await commitMeetingSegments({ meetingRef, meetingDoc, segments });
+  const points = await buildSegmentPoints({ uid, meetingId, segments });
   await getQdrant().upsert(COLLECTION, { wait: true, points });
 
   return { meetingId, segmentCount: segments.length };
@@ -580,6 +629,30 @@ export const updateUserProfile = onCall(async (request) => {
   return { profile: serializeProfile({ ...profile, ...updates }) };
 });
 
+export const clearTemporaryPasswordState = onCall(async (request) => {
+  const profile = await ensureProfileForRequest(request);
+  const issuedAt = profile.temporaryPasswordCreatedAt?.toDate?.()
+    || (profile.temporaryPasswordCreatedAt ? new Date(profile.temporaryPasswordCreatedAt) : null);
+  if (profile.requiresPasswordChange && !issuedAt) {
+    throw new HttpsError("permission-denied", "Ask an admin to generate a new temporary password.");
+  }
+  if (profile.requiresPasswordChange) {
+    const user = await auth.getUser(profile.uid);
+    const tokensValidAfter = user.tokensValidAfterTime ? new Date(user.tokensValidAfterTime) : null;
+    if (!tokensValidAfter || tokensValidAfter <= issuedAt) {
+      throw new HttpsError("permission-denied", "Change your temporary password before continuing.");
+    }
+  }
+  const updates = {
+    requiresPasswordChange: false,
+    temporaryPasswordCreatedAt: null,
+    temporaryPasswordExpiresAt: null,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+  await profileRef(profile.uid).set(updates, { merge: true });
+  return { profile: serializeProfile({ ...profile, ...updates }) };
+});
+
 export const listUsers = onCall(async (request) => {
   await requireAdmin(request);
   const snapshot = await db.collection("users").orderBy("createdAt", "desc").limit(100).get();
@@ -707,6 +780,7 @@ export const adminGenerateTemporaryPassword = onCall(async (request) => {
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
   await auth.updateUser(uid, { password: tempPassword });
   await profileRef(uid).set({
+    temporaryPasswordCreatedAt: new Date(),
     temporaryPasswordExpiresAt: expiresAt,
     requiresPasswordChange: true,
     updatedAt: FieldValue.serverTimestamp(),
@@ -1194,7 +1268,7 @@ export const inferSpeakerNames = onCall(async (request) => {
       suggestedName: String(item.suggestedName).trim(),
       confidence: Number(item.confidence) || 0,
     }))
-    .filter((item) => item.suggestedName && item.confidence >= 0.55)
+    .filter((item) => item.suggestedName && item.confidence >= 0.8)
     .filter((item) => !/introduction|self-introduction/i.test(item.suggestedName));
 
   return { suggestions };
